@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.9.2 — 2026-11-01
+## 0.9.3 — 2026-11-01
+
+原生记忆面板（`dshGo.panel`）支持操作，作为 C 路线的主入口。
+
+- 面板新增「待确认」选项列表 + 接受 / 忽略 / 立即整理 / 刷新四个按钮。
+- 接受/忽略直接调用 inbox 逻辑；操作后 `refresh` 重拉数据，本机与远程 Host 通用（走宿主侧 dshGo bridge）。
+- 数据回调新增 `inboxCount` / `inbox` / `inboxLine` / `selected`。
+- 74 例测试（71 通过 / 3 跳过）。
+
+## 0.9.2 — 2026-11-01## 0.9.2 — 2026-11-01
 
 新增 `/mesh-memory` 斜杠命令，为 Go 原生记忆页提供"动作通道"。
 
@@ -270,6 +279,7 @@
 ## 0.1.0 — 2026-10-31
 
 - Initial MVP: shared memory, 13 `mesh_*` tools, Remote delegation, file transfer.
+
 
 
 

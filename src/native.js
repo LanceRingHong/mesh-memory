@@ -1,5 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { acceptInbox, rejectInbox } from './inbox.js'
+import { flushAllSessions } from './capture.js'
 
 function walkSync(root, rel = '') {
   const out = []
@@ -69,7 +71,7 @@ function devicesSync(root) {
   }
 }
 
-function snapshot(settings) {
+export function snapshot(settings, selected) {
   const root = settings.memoryDir
   const files = []
   const agents = path.join(root, 'AGENTS.shared.md')
@@ -96,6 +98,11 @@ function snapshot(settings) {
   }
   files.sort((a, b) => b.mtimeMs - a.mtimeMs)
 
+  let inbox = []
+  try {
+    inbox = listInboxSync(settings)
+  } catch {}
+
   return {
     device: settings.deviceName,
     memoryDir: root,
@@ -112,14 +119,53 @@ function snapshot(settings) {
       action: { id: 'open', args: { path: row.path } },
     })),
     devices: devicesSync(root).map((d) => d.name || d.deviceSlug || 'device'),
+    inboxCount: inbox.length,
+    inboxLine: inbox.length ? `待确认 ${inbox.length} 条（选一条后点「接受」或「忽略」）` : '没有待确认的会话',
+    inbox: inbox.slice(0, 8).map((item) => ({
+      label: item.title,
+      description: `${item.turns} 轮 · ${(item.updatedAt || item.createdAt || '').replace('T', ' ').slice(0, 16)}`,
+      value: item.path,
+    })),
+    selected,
     updatedAt: new Date().toISOString(),
   }
 }
 
-const VIEW = {
-  type: 'stack',
-  title: 'DSH Mesh 记忆',
-  children: [
+/** 面板数据回调是同步 emit，所以这里用同步读目录的方式列草稿。 */
+function listInboxSync(settings) {
+  const dir = path.join(settings.dshHome || '', 'dsh-mesh', 'inbox', 'sessions')
+  if (!settings.dshHome) return []
+  let entries = []
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const out = []
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.md') || entry.name.startsWith('.')) continue
+    try {
+      const file = path.join(dir, entry.name)
+      const head = fs.readFileSync(file, 'utf8').slice(0, 4096)
+      const title = (head.match(/^title:\s*(.+)$/m) || [])[1] || entry.name.replace(/\.md$/, '')
+      const turns = Number((head.match(/^turns:\s*(\d+)/m) || [])[1] || 0)
+      const updated = (head.match(/^updatedAt:\s*(.+)$/m) || [])[1] || ''
+      out.push({
+        path: `sessions/${entry.name}`,
+        title: String(title).replace(/^["']|["']$/g, ''),
+        turns,
+        updatedAt: String(updated).replace(/^["']|["']$/g, ''),
+        mtimeMs: fs.statSync(file).mtimeMs,
+      })
+    } catch {}
+  }
+  return out.sort((a, b) => b.mtimeMs - a.mtimeMs)
+}
+
+let selectedDraft = ''
+
+function view() {
+  const children = [
     {
       type: 'row',
       children: [
@@ -136,18 +182,22 @@ const VIEW = {
         ['目录', { $: 'data.memoryDir' }],
       ],
     },
-    { type: 'text', text: '全部同步内容（点击条目复制正文）', tone: 'muted' },
-    { type: 'list', items: { $: 'data.files' } },
+    { type: 'text', text: { $: 'data.inboxLine' }, tone: 'muted' },
+    { type: 'options', id: 'pick', options: { $: 'data.inbox' }, selected: { $: 'data.selected' } },
     {
       type: 'actions',
-      items: [{ label: '刷新', action: 'refresh', style: 'primary' }],
+      items: [
+        { label: '接受', action: 'accept', style: 'primary' },
+        { label: '忽略', action: 'reject' },
+        { label: '立即整理', action: 'flush' },
+        { label: '刷新', action: 'refresh' },
+      ],
     },
-    {
-      type: 'callout',
-      text: '只读；完整树与搜索在浏览器 127.0.0.1:8765',
-      tone: 'info',
-    },
-  ],
+    { type: 'text', text: '全部同步内容（点击条目复制正文）', tone: 'muted' },
+    { type: 'list', items: { $: 'data.files' } },
+    { type: 'callout', text: '「接受」写入笔记（可在桌面端改分类）；「忽略」归档草稿。', tone: 'info' },
+  ]
+  return { type: 'stack', title: 'DSH Mesh 记忆', children }
 }
 
 export function registerNative(ctx, settings) {
@@ -156,15 +206,47 @@ export function registerNative(ctx, settings) {
     if (!dshGo || typeof dshGo.panel !== 'function') return () => {}
 
     const panel = {
-      view: () => VIEW,
+      view,
       data: (scope, emit) => {
-        const tick = () => emit(snapshot(settings))
+        const tick = () => emit(snapshot(settings, selectedDraft))
         tick()
         const timer = setInterval(tick, 30_000)
         return () => clearInterval(timer)
       },
       actions: {
         refresh: () => ({ refresh: true }),
+        pick: (scope, event) => {
+          selectedDraft = String(event?.value?.value || '')
+          return { refresh: true }
+        },
+        accept: async () => {
+          if (!selectedDraft) return { toast: '先在待确认里选一条' }
+          try {
+            const result = await acceptInbox(settings, selectedDraft, { kind: 'notes' })
+            selectedDraft = ''
+            return { refresh: true, toast: `已接受 → ${result.memory}` }
+          } catch (error) {
+            return { toast: `接受失败：${error?.message || error}` }
+          }
+        },
+        reject: async () => {
+          if (!selectedDraft) return { toast: '先在待确认里选一条' }
+          try {
+            await rejectInbox(settings, selectedDraft)
+            selectedDraft = ''
+            return { refresh: true, toast: '已忽略' }
+          } catch (error) {
+            return { toast: `忽略失败：${error?.message || error}` }
+          }
+        },
+        flush: async () => {
+          try {
+            const flushed = await flushAllSessions(settings, 'native')
+            return { refresh: true, toast: flushed.length ? `已整理 ${flushed.length} 条` : '没有可整理的会话' }
+          } catch (error) {
+            return { toast: `整理失败：${error?.message || error}` }
+          }
+        },
         open: (scope, event) => {
           const rel = String(event?.value?.path || '')
           try {
@@ -182,3 +264,5 @@ export function registerNative(ctx, settings) {
   })
   return () => {}
 }
+
+
