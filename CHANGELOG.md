@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.1 — 2026-11-01
+
+修复移动端页面卡在「加载中」。
+
+- 根因：页面用 `Promise.all` 加载 status/tree/inbox/backup；Android 平板没有 `git`，`/api/backup` 抛 `spawn git ENOENT`，整页加载被中断。
+- `GET /api/backup` 改为容错：git 不可用时返回 `{ok:true, available:false, reason}`，不再 500。
+- 移动页与桌面客户端改为逐接口容错：备份失败不影响待确认/记忆；备份页显示「备份不可用：…」。
+- 备份模块先探测 `git --version`，错误信息改为可读提示。
 ## 0.9.0 — 2026-11-01
 
 独立页面（8765）升级为移动适配的完整 GUI，Go 本机可用浏览器直接操作。
@@ -255,5 +263,6 @@
 ## 0.1.0 — 2026-10-31
 
 - Initial MVP: shared memory, 13 `mesh_*` tools, Remote delegation, file transfer.
+
 
 

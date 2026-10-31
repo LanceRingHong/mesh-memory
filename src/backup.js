@@ -47,7 +47,23 @@ async function exists(file) {
   }
 }
 
+let gitState = null
+
+/** Android 等环境可能没有 git：给出可读错误，而不是 spawn ENOENT。 */
+async function assertGit(settings) {
+  if (gitState === true) return
+  if (gitState === false) throw new Error('本机没有 git，备份功能不可用（请在桌面端操作，或在设备上安装 git）')
+  try {
+    await runGit(settings, ['--version'])
+    gitState = true
+  } catch {
+    gitState = false
+    throw new Error('本机没有 git，备份功能不可用（请在桌面端操作，或在设备上安装 git）')
+  }
+}
+
 async function ensureRepo(settings) {
+  await assertGit(settings)
   const dir = backupDir(settings)
   await fs.mkdir(dir, { recursive: true })
   if (await exists(path.join(dir, 'HEAD'))) return

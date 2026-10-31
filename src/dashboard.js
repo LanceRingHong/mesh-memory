@@ -157,7 +157,7 @@ const HTML = `<!doctype html>
 <script>
 var TOKEN = new URLSearchParams(location.search).get('token') || localStorage.getItem('dshMeshToken') || ''
 if (new URLSearchParams(location.search).get('token')) localStorage.setItem('dshMeshToken', TOKEN)
-var state = { status: null, inbox: [], files: [], backups: [], tab: 'inbox', draft: '', draftPath: '', file: '', fileText: '', groups: {}, editing: false, creating: false }
+var state = { status: null, inbox: [], files: [], backups: [], tab: 'inbox', draft: '', draftPath: '', file: '', fileText: '', groups: {}, editing: false, creating: false, backupError: '' }
 
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] }) }
 function toast(msg) { var el = document.getElementById('toast'); el.textContent = msg; el.classList.add('on'); clearTimeout(toast._t); toast._t = setTimeout(function () { el.classList.remove('on') }, 2600) }
@@ -236,14 +236,22 @@ function setTab(tab) {
 function openDetail(which) { var el = $(which === 'inbox' ? 'inboxDetail' : 'memDetail'); if (el) el.classList.add('show') }
 function closeDetail(which) { var el = $(which === 'inbox' ? 'inboxDetail' : 'memDetail'); if (el) el.classList.remove('show') }
 
+function safe(p) {
+  return p.then(function (v) { return { ok: true, v: v } }, function (e) { return { ok: false, e: e && e.message ? e.message : String(e) } })
+}
 function load() {
-  return Promise.all([api('/status'), api('/tree'), api('/inbox'), api('/backup')]).then(function (out) {
-    state.status = out[0]; state.inbox = out[2].items || []; state.backups = out[3].items || []; state.files = flatten(out[1].root || [], '')
+  return Promise.all([safe(api('/status')), safe(api('/tree')), safe(api('/inbox')), safe(api('/backup'))]).then(function (out) {
+    if (!out[0].ok) { $('sub').textContent = '加载失败：' + out[0].e; toast(out[0].e); return }
+    state.status = out[0].v
+    if (out[1].ok) state.files = flatten(out[1].v.root || [], '')
+    state.inbox = out[2].ok ? (out[2].v.items || []) : []
+    state.backups = out[3].ok ? (out[3].v.items || []) : []
+    state.backupError = out[3].ok ? (out[3].v.available === false ? (out[3].v.reason || '备份不可用') : '') : out[3].e
     var c = state.status.counts || {}
     $('sub').textContent = (state.status.device || 'device') + ' · ' + (c.facts || 0) + ' 事实 · ' + (c.notes || 0) + ' 笔记 · ' + (c.sessions || 0) + ' 摘要'
     $('n-inbox').textContent = state.inbox.length ? ' ' + state.inbox.length : ''
     renderInbox(); renderMemory(); renderBackup()
-  }).catch(function (e) { toast(e.message) })
+  }).catch(function (e) { $('sub').textContent = '加载失败：' + (e && e.message ? e.message : e) })
 }
 
 function renderInbox() {
@@ -353,6 +361,7 @@ function newMemory() {
 }
 function renderBackup() {
   var box = $('backupList')
+  if (state.backupError) { box.innerHTML = '<div class="empty">备份不可用：' + esc(state.backupError) + '</div>'; return }
   if (!state.backups.length) { box.innerHTML = '<div class="empty">还没有快照。</div>'; return }
   box.innerHTML = ''
   state.backups.forEach(function (row) {
@@ -611,8 +620,12 @@ export function registerDashboard(ctx, settings) {
           return
         }
         if (pathname === '/dsh-mesh/api/backup') {
-          const items = await listSnapshots(settings)
-          writeJson(res, 200, { ok: true, count: items.length, items })
+          try {
+            const items = await listSnapshots(settings)
+            writeJson(res, 200, { ok: true, count: items.length, items, available: true })
+          } catch (error) {
+            writeJson(res, 200, { ok: true, count: 0, items: [], available: false, reason: String(error?.message || error) })
+          }
           return
         }
         if (pathname === '/dsh-mesh/api/conflicts') {

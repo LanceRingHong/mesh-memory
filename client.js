@@ -389,6 +389,7 @@ window.__ModuleLoader__.load({
       const [draftText, setDraftText] = useState('')
       const [draftKind, setDraftKind] = useState('notes')
       const [backups, setBackups] = useState([])
+      const [backupIssue, setBackupIssue] = useState('')
       const [editing, setEditing] = useState(false)
       const [editText, setEditText] = useState('')
       const [creating, setCreating] = useState(false)
@@ -407,11 +408,17 @@ window.__ModuleLoader__.load({
         setBusy(true)
         setError('')
         try {
-          const [s, t, ib, bk] = await Promise.all([api('/status'), api('/tree'), api('/inbox'), api('/backup')])
+          const [s, t, ib, bk] = await Promise.all([
+            api('/status'),
+            api('/tree'),
+            api('/inbox'),
+            api('/backup').catch((error) => ({ items: [], available: false, reason: String(error?.message || error) })),
+          ])
           setStatus(s)
           setTree(t.root || [])
           setInbox(ib.items || [])
           setBackups(bk.items || [])
+          setBackupIssue(bk.available === false ? bk.reason || '备份不可用' : '')
           setExpanded(new Set(['memory', 'memory/facts', 'memory/decisions', 'memory/projects', 'memory/notes', 'sessions', 'skills', 'index', '.mesh']))
         } catch (e) {
           setError(String(e?.message || e))
@@ -831,7 +838,7 @@ window.__ModuleLoader__.load({
                 ),
               ]),
             )
-          : h('div', { className: 'dsh-mesh-empty' }, '还没有快照。'),
+          : h('div', { className: 'dsh-mesh-empty' }, backupIssue ? `备份不可用：${backupIssue}` : '还没有快照。'),
       ])
 
       return h('div', { className: 'dsh-mesh-explorer' }, [
