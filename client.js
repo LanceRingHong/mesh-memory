@@ -58,6 +58,10 @@ window.__ModuleLoader__.load({
       '.dsh-mesh-split{display:flex;gap:12px;min-height:0;flex:1;align-items:stretch}',
       '.dsh-mesh-split>.dsh-mesh-box{flex:0 0 clamp(180px,30%,330px);min-width:0}',
       '.dsh-mesh-split>.dsh-mesh-content{flex:1;min-width:0}',
+      '.dsh-mesh-explorer.narrow .dsh-mesh-split{position:relative;flex-direction:column}',
+      '.dsh-mesh-explorer.narrow .dsh-mesh-split>.dsh-mesh-box{flex:1 1 auto;max-height:none;width:100%}',
+      '.dsh-mesh-explorer.narrow .dsh-mesh-split>.dsh-mesh-content{display:none}',
+      '.dsh-mesh-explorer.narrow .dsh-mesh-split>.dsh-mesh-content.show{display:flex;position:absolute;inset:0;z-index:6;background:var(--dsw-alias-bg-layer-1,#171a21)}',
       // 面板
       '.dsh-mesh-box{background:var(--dsw-alias-bg-layer-2,rgba(127,127,127,.05));border:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.2));border-radius:14px;padding:10px;min-height:0;overflow:auto}',
       '.dsh-mesh-box-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:2px 4px 10px;font-size:12px;opacity:.85}',
@@ -397,7 +401,10 @@ window.__ModuleLoader__.load({
       const [newKind, setNewKind] = useState('notes')
       const [newContent, setNewContent] = useState('')
       const [toast, setToast] = useState('')
+      const [narrow, setNarrow] = useState(false)
+      const [detail, setDetail] = useState(false)
       const requestSeq = useRef(0)
+      const rootRef = useRef(null)
 
       const flash = (text) => {
         setToast(text)
@@ -444,12 +451,25 @@ window.__ModuleLoader__.load({
         openFile('AGENTS.shared.md')
       }, [])
 
+      // Go 会把同一个视图塞进右侧窄栏：按容器宽度（不是窗口）切成两态。
+      useEffect(() => {
+        const el = rootRef.current
+        if (!el || typeof ResizeObserver !== 'function') return
+        const observer = new ResizeObserver((entries) => {
+          const width = entries[0]?.contentRect?.width || 0
+          setNarrow(width > 0 && width < 620)
+        })
+        observer.observe(el)
+        return () => observer.disconnect()
+      }, [])
+
       const openFile = async (p) => {
         const seq = requestSeq.current + 1
         requestSeq.current = seq
         setBusy(true)
         setError('')
         setEditing(false)
+        setDetail(true)
         try {
           const out = await api('/file?path=' + encodeURIComponent(p))
           if (seq !== requestSeq.current) return
@@ -500,6 +520,7 @@ window.__ModuleLoader__.load({
       const openDraft = async (p) => {
         setDraftPath(p)
         setDraftText('')
+        setDetail(true)
         try {
           const out = await api('/inbox/file?path=' + encodeURIComponent(p))
           setDraftText(out.text || '')
@@ -666,8 +687,11 @@ window.__ModuleLoader__.load({
               )
             : h('div', { className: 'dsh-mesh-empty' }, '还没有待确认的会话。结束一个会话或空闲 5 分钟后自动出现。'),
         ]),
-        h('div', { className: 'dsh-mesh-content', key: 'detail' }, [
+        h('div', { className: 'dsh-mesh-content' + (narrow && detail ? ' show' : ''), key: 'detail' }, [
           h('div', { className: 'dsh-mesh-content-head', key: 'h' }, [
+            narrow
+              ? h('button', { className: 'dsh-mesh-btn sm', key: 'back', onClick: () => setDetail(false) }, '‹ 返回')
+              : null,
             h('div', { className: 'dsh-mesh-content-path', key: 'p' }, draftPath || '选择左侧条目查看摘要'),
             draftPath
               ? h('div', { className: 'dsh-mesh-actions', key: 'a' }, [
@@ -711,8 +735,11 @@ window.__ModuleLoader__.load({
           : null,
       ])
 
-      const contentBox = h('div', { className: 'dsh-mesh-content', key: 'content' }, [
+      const contentBox = h('div', { className: 'dsh-mesh-content' + (narrow && detail ? ' show' : ''), key: 'content' }, [
         h('div', { className: 'dsh-mesh-content-head', key: 'h' }, [
+          narrow
+            ? h('button', { className: 'dsh-mesh-btn sm', key: 'back', onClick: () => setDetail(false) }, '‹ 返回')
+            : null,
           h('div', { className: 'dsh-mesh-content-path', key: 'p' }, selected || '选择左侧文件查看内容'),
           h('div', { className: 'dsh-mesh-actions', key: 'a' }, [
             isMarkdown
@@ -841,7 +868,7 @@ window.__ModuleLoader__.load({
           : h('div', { className: 'dsh-mesh-empty' }, backupIssue ? `备份不可用：${backupIssue}` : '还没有快照。'),
       ])
 
-      return h('div', { className: 'dsh-mesh-explorer' }, [
+      return h('div', { className: 'dsh-mesh-explorer' + (narrow ? ' narrow' : ''), ref: rootRef }, [
         head,
         toast ? h('div', { className: 'dsh-mesh-toast', key: 'toast' }, toast) : null,
         error ? h('div', { className: 'dsh-mesh-err', key: 'e' }, error) : null,
@@ -946,14 +973,6 @@ window.__ModuleLoader__.load({
       disposers.push(
         ctx.slots.inject('sidebar.footer.action', () =>
           ctx.slots.register({ name: 'sidebar.footer.action', id: 'dsh-mesh-memory' }, SidebarEntry),
-        ),
-      )
-      disposers.push(
-        ctx.slots.inject('conversation.session.header.utilities', () =>
-          ctx.slots.register(
-            { name: 'conversation.session.header.utilities', id: 'dsh-mesh-memory-header' },
-            HeaderEntry,
-          ),
         ),
       )
       return () => {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.6 — 2026-11-01
+
+去掉聊天槽「记忆」，并把窄容器布局做成两态。
+
+- 移除 `conversation.session.header.utilities` 注册：Go 不再把它当成右侧窄栏面板，只保留 `conversation.view` 的整页「记忆」。
+- `client.js` 用 `ResizeObserver` 按**容器宽度**（<620px）切「列表 / 详情」两态，详情带「返回」；不再依赖窗口断点。
+- 文档：`docs/开发文档.md` 更新到 0.9.6，补齐 0.8.1–0.9.6 变更与远程限制。
+- 77 例测试（74 通过 / 3 跳过）。
 ## 0.9.5 — 2026-11-01
 
 原生 manifest 增加 `inbox`（待确认草稿），供 Go 原生记忆页在远程模式展示。
@@ -293,6 +301,7 @@
 ## 0.1.0 — 2026-10-31
 
 - Initial MVP: shared memory, 13 `mesh_*` tools, Remote delegation, file transfer.
+
 
 
 

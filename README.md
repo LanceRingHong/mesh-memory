@@ -2,7 +2,7 @@
 
 > 跨设备共享记忆 + DSH 委托，给 DeepSeek Harness 装上“不会失忆的第二大脑”。
 
-![version](https://img.shields.io/badge/version-0.9.4-blue)
+![version](https://img.shields.io/badge/version-0.9.6-blue)
 ![license](https://img.shields.io/github/license/LanceRingHong/dsh-mesh)
 ![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.x-8a2be2)
 ![Node](https://img.shields.io/badge/Node-%E2%89%A518-3c873a)
@@ -12,7 +12,7 @@
 - 通过 **DSH Remote** 委托另一台设备建会话、执行任务、读结果、传文件。
 - 桌面有侧栏/顶栏入口，DSH Go 有原生记忆页。
 
-> 当前版本 `0.9.4`（图形化记忆中心：待确认 / 记忆 / 备份），MIT。DSH Go 原生记忆页的配套 PR：
+> 当前版本 `0.9.6`（图形化记忆中心：待确认 / 记忆 / 备份），MIT。DSH Go 原生记忆页的配套 PR：
 > [dsh-go #168](https://github.com/ccch1mneyyy/dsh-Go/pull/168)（Ready for review）。
 
 ---
@@ -466,6 +466,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Rollback   # 回到
 - DSH Go：AGPL-3.0（独立项目；本仓库不包含其代码）。
 
 感谢 DSH、DSH Remote、Syncthing、DSH Go 的维护者与社区。
+
 
 
 
