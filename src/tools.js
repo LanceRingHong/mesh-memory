@@ -374,7 +374,7 @@ export function registerTools(ctx, settings) {
         '',
       ].join('\n')
       await writeFileAtomic(file, body)
-      await appendJsonl(settings, 'sessions.jsonl', {
+      await appendJsonl(settings, path.join('sessions', `${settings.deviceSlug}.jsonl`), {
         device: settings.deviceName,
         deviceSlug: settings.deviceSlug,
         sessionId,

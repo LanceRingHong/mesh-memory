@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.2 — 2026-10-31
+
+修复 0.6.0 引入的跨设备写冲突。
+
+- 设备注册表改为**每设备一个文件**：`index/devices/<slug>.json`。上一版所有设备都写 `index/devices.json`，
+  在 Syncthing 下会互相覆盖（平板实测出现 `devices.sync-conflict-*`）。
+- `listDevices` 合并各设备文件 + 旧 `index/devices.json`（只读兼容），按 slug/名字去重。
+- `mesh_digest` 的会话索引改为 `index/sessions/<slug>.jsonl`，同样避免多设备追加同一文件。
+- 新增测试：两台设备写同一记忆目录时互不覆盖、旧注册表只读兼容。
+
 ## 0.6.1 — 2026-10-31
 
 修复 Windows CI 暴露的上传白名单误判。

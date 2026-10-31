@@ -149,6 +149,30 @@ test('并发 publishNativeManifest 不产生 ENOENT（P2-3）', async (t) => {
   assert.ok(Array.isArray(manifest.files))
 })
 
+test('设备注册表按设备分文件，避免跨设备写冲突（P2-2）', async (t) => {
+  const { settings, cleanup, memoryDir } = await makeSettings()
+  t.after(cleanup)
+  await store.ensureLayout(settings)
+
+  const legacyPath = path.join(memoryDir, 'index', 'devices.json')
+  const legacy = { devices: [{ name: 'Legacy Device', deviceSlug: 'legacy' }] }
+  await fs.writeFile(legacyPath, JSON.stringify(legacy, null, 2), 'utf8')
+
+  const a = { ...settings, deviceName: 'Device A', deviceSlug: 'device-a' }
+  const b = { ...settings, deviceName: 'Device B', deviceSlug: 'device-b' }
+  await store.updateDevices(a)
+  await store.updateDevices(b)
+
+  assert.ok(await fs.stat(path.join(memoryDir, 'index', 'devices', 'device-a.json')).then(() => true).catch(() => false))
+  assert.ok(await fs.stat(path.join(memoryDir, 'index', 'devices', 'device-b.json')).then(() => true).catch(() => false))
+  // 旧文件保持只读，不被改写
+  assert.deepEqual(JSON.parse(await fs.readFile(legacyPath, 'utf8')), legacy)
+
+  const list = await store.listDevices(a)
+  const slugs = list.map((item) => item.deviceSlug).sort()
+  assert.deepEqual(slugs, ['device-a', 'device-b', 'legacy'])
+})
+
 test('parseFrontmatter 处理 BOM/折叠块/流式数组/缺尾换行（P2-4）', async () => {
   const withBom = store.parseFrontmatter('\uFEFF---\ntitle: "带BOM"\n---\nbody')
   assert.equal(withBom.attrs.title, '带BOM')

@@ -83,16 +83,20 @@ export async function ensureLayout(settings) {
 }
 
 /**
- * 设备注册表（P2-2）：插件自己维护本机条目，10 分钟内不重复写，避免同步抖动。
+ * 设备注册表（P2-2）：**每台设备只写自己的文件** `index/devices/<slug>.json`，
+ * 避免多设备同时写同一个 devices.json 产生 Syncthing 冲突（0.6.2）。
+ * 旧的 `index/devices.json` 仍作为只读来源兼容。
  */
 export async function updateDevices(settings, extra = {}) {
-  const file = path.join(settings.memoryDir, 'index', 'devices.json')
-  let data = { devices: [] }
+  const dir = path.join(settings.memoryDir, 'index', 'devices')
+  await fs.mkdir(dir, { recursive: true })
+  const file = path.join(dir, `${settings.deviceSlug}.json`)
+  let prev = null
   try {
-    data = JSON.parse(await fs.readFile(file, 'utf8'))
+    prev = JSON.parse(await fs.readFile(file, 'utf8'))
   } catch {}
-  const devices = Array.isArray(data.devices) ? data.devices : []
   const now = Date.now()
+  const last = Date.parse(prev?.lastSeen || '')
   const entry = {
     name: settings.deviceName,
     deviceSlug: settings.deviceSlug,
@@ -100,23 +104,38 @@ export async function updateDevices(settings, extra = {}) {
     ...extra,
     lastSeen: new Date(now).toISOString(),
   }
-  const idx = devices.findIndex(
-    (item) => item?.deviceSlug === settings.deviceSlug || item?.name === settings.deviceName,
-  )
-  if (idx >= 0) {
-    const prev = devices[idx] || {}
-    const last = Date.parse(prev.lastSeen || '')
-    const merged = { ...prev, ...entry }
-    if (Number.isFinite(last) && now - last < 10 * 60 * 1000) {
-      devices[idx] = merged
-      return devices
-    }
-    devices[idx] = merged
-  } else {
-    devices.push(entry)
+  if (!(Number.isFinite(last) && now - last < 10 * 60 * 1000)) {
+    await writeFileAtomic(file, `${JSON.stringify(entry, null, 2)}\n`)
   }
-  await writeFileAtomic(file, `${JSON.stringify({ devices }, null, 2)}\n`)
-  return devices
+  return await listDevices(settings)
+}
+
+/** 合并各设备自己的注册文件 + 旧 devices.json，按 slug/名字去重。 */
+export async function listDevices(settings) {
+  const rows = []
+  const dir = path.join(settings.memoryDir, 'index', 'devices')
+  try {
+    const names = (await fs.readdir(dir)).filter((name) => name.endsWith('.json') && !name.includes('.sync-conflict-'))
+    for (const name of names) {
+      try {
+        const data = JSON.parse(await fs.readFile(path.join(dir, name), 'utf8'))
+        if (data?.deviceSlug || data?.name) rows.push(data)
+      } catch {}
+    }
+  } catch {}
+  try {
+    const legacy = JSON.parse(await fs.readFile(path.join(settings.memoryDir, 'index', 'devices.json'), 'utf8'))
+    for (const item of Array.isArray(legacy.devices) ? legacy.devices : []) {
+      if (item?.deviceSlug || item?.name) rows.push(item)
+    }
+  } catch {}
+  const merged = new Map()
+  for (const row of rows) {
+    const key = String(row.deviceSlug || row.name || '')
+    if (!key) continue
+    merged.set(key, { ...merged.get(key), ...row })
+  }
+  return [...merged.values()].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
 }
 
 /**
