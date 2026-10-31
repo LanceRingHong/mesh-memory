@@ -19,6 +19,8 @@ foreach ($name in $Profiles) {
   $dst = Join-Path $profileDir 'node_modules\dsh-mesh'
   Remove-Item $dst -Recurse -Force -ErrorAction SilentlyContinue
   Copy-Item $src $dst -Recurse -Force
+  # The source tree is a git checkout; don't ship .git into node_modules.
+  Remove-Item (Join-Path $dst '.git') -Recurse -Force -ErrorAction SilentlyContinue
 
   $pkgPath = Join-Path $profileDir 'package.json'
   Copy-Item $pkgPath "$pkgPath.bak-mesh-$stamp" -Force
