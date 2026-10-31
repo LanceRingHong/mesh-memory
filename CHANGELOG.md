@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.7.0 — 2026-11-01
+
+无感记忆 P1：自动记录 + 本机收件箱 + git 快照（零模型调用、默认开启）。
+
+### 自动记录（capture）
+
+- 订阅 `session/event`，在内存里按会话缓冲 `user/message`、`assistant/message`、`tool/call`、`turn/start`、`session/title`；事件回调不做 IO。
+- 只记 `source.kind === 'user'` 的用户输入（harness 的运行时上下文同样是 user 角色，已过滤）。
+- `session/disposed`、空闲 `captureIdleMinutes`（默认 5）或手动 flush 时，生成**机械摘要**：用户诉求、最后结论、涉及文件、工具、轮数。
+- 草稿写到 `$DSH_HOME/dsh-mesh/inbox/sessions/<sessionId>.md`（本机、不同步、不参与召回）。
+
+### 收件箱（inbox）
+
+- 新增 `mesh_memory_inbox`：`list` / `read` / `accept` / `reject` / `flush`。
+- `accept` 把草稿转成正式记忆（默认 `memory/notes/`，带 `auto-capture` 标签），草稿归档到 `inbox/accepted/`。
+- 收件箱非空时，每会话最多一次在系统提示里注入一行提醒（不重复占 token）。
+- dashboard 新增「待确认」计数、`/api/inbox`、`/api/inbox/file` 与区块；桌面客户端卡片。
+
+### 备份（git）
+
+- 新增 `mesh_memory_backup`：`snapshot` / `list` / `restore`（`restore` 需 `confirm:true`，且先做还原前快照）。
+- git 目录在 `$DSH_HOME/dsh-mesh-backups.git`，work-tree 是共享记忆目录——**`.git` 不进 Syncthing**，每台设备独立历史。
+- 写入（write/update/delete/digest/sync/accept）后 debounce 60s 合并提交；另每 6 小时定时快照。
+
+### 配置
+
+`captureEnabled`、`captureIdleMinutes`、`captureMinTurns`、`backupEnabled`、`backupDebounceSeconds`、`backupIntervalMinutes`。
+
+### 测试
+
+70 例（67 通过 / 3 跳过）：新增 capture 事件解析、inbox 写入/接受/拒绝/路径限制、git 快照与还原。
+
 ## 0.6.2 — 2026-10-31
 
 修复 0.6.0 引入的跨设备写冲突。
@@ -178,3 +210,4 @@
 ## 0.1.0 — 2026-10-31
 
 - Initial MVP: shared memory, 13 `mesh_*` tools, Remote delegation, file transfer.
+

@@ -22,7 +22,7 @@
 - **写入**：`mesh_digest` 的 `sessionId` 走白名单；记忆文件用临时文件 + `rename`；`AGENTS.md` 托管块会转义 `<!-- dsh-mesh:* -->` 标记并保留 10 份备份。
 - **上传**：`mesh_send_file` 只允许 `allowedUploadRoots` 内的文件；`.env`、`id_*`、`*.pem`、`*.key`、`*.jks`、`.ssh/` 等永远拒绝。
 
-### 已知未覆盖（计划 0.7.x）
+### 已知未覆盖（计划 0.8.x）
 
 - `mesh_memory_sync` 的“应用”由上下文里的 Agent 转述用户同意（`confirm` + `expectedSha256`），**不是**宿主级审批弹窗；能改 Agent 上下文的攻击者仍可能说服模型去应用。
 - 没有加密选项；共享目录里的敏感记忆仍以明文同步。
@@ -37,6 +37,13 @@
 - 只读页面：socket 地址 + Host 头双重校验，可选 `dashboardToken`。
 - 桌面客户端：请求超时、竞态修复、Markdown sanitizer。
 - skill 同步：超过 `maxSkillBytes` 或含符号链接时拒绝。
+
+### 0.7.0 补强
+
+- 自动记录只写本机 `$DSH_HOME/dsh-mesh/inbox/`：不进共享目录、不参与召回、不跨设备同步；`accept` 后才成为正式记忆。
+- 机械摘要不调用模型；harness 的运行时上下文（同为用户角色但 `source.kind` 不是 `user`）会被过滤。
+- git 快照的 `.git` 目录在 `$DSH_HOME/dsh-mesh-backups.git`，不作为 work-tree 的一部分被 Syncthing 同步。
+- `mesh_memory_backup restore` 需要 `confirm:true`，且会先对当前状态做一次快照，可再回滚。
 
 ## 建议
 

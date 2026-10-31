@@ -439,6 +439,7 @@ window.__ModuleLoader__.load({
           Card('项目', counts.projects),
           Card('笔记', counts.notes),
           Card('会话摘要', counts.sessions),
+          Card('待确认', counts.inbox),
           Card('冲突', counts.conflicts),
         ]),
 

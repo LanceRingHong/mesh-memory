@@ -6,6 +6,9 @@ import { registerTools } from './src/tools.js'
 import { registerDashboard } from './src/dashboard.js'
 import { registerNative } from './src/native.js'
 import { registerRecall } from './src/recall.js'
+import { registerCapture } from './src/capture.js'
+import { inboxNudge } from './src/inbox.js'
+import { snapshot } from './src/backup.js'
 
 export const name = 'dsh-mesh'
 
@@ -32,6 +35,13 @@ export const Config = Schema.object({
     .description('允许 mesh_send_file 上传的本机目录；留空时默认共享记忆目录 + 用户 Downloads。'),
   dashboardToken: Schema.string().default('').description('只读页面访问 token；留空表示不校验（仍只绑定 127.0.0.1）。'),
   maxSkillBytes: Schema.number().default(2000000).description('单个共享 skill 目录的大小上限（字节）。'),
+  captureEnabled: Schema.boolean().default(true).description('自动记录会话：把完成的会话写成本机收件箱草稿（不同步、不召回）。'),
+  captureIdleMinutes: Schema.number().default(5).description('会话空闲多少分钟后生成草稿。'),
+  captureMinTurns: Schema.number().default(2).description('至少多少轮才记录。'),
+  backupEnabled: Schema.boolean().default(true).description('把共享记忆目录快照到本机 git 仓库（git 目录在 $DSH_HOME）。'),
+  backupDebounceSeconds: Schema.number().default(60).description('写入后多久合并成一个快照。'),
+  backupIntervalMinutes: Schema.number().default(360).description('定时快照间隔（分钟，0 关闭）。'),
+  inboxMaxDrafts: Schema.number().default(100).description('收件箱最多保留多少条草稿。'),
 })
 
 const SKILL = `# dsh-mesh：跨设备共享记忆与委托
@@ -83,6 +93,36 @@ function registerSkill(ctx) {
   })
 }
 
+/**
+ * 收件箱提醒：每会话最多一次，避免每轮都占 token。
+ */
+function registerInboxNudge(ctx, settings) {
+  if (settings.captureEnabled !== true || typeof ctx.on !== 'function') return () => {}
+  const nudged = new Set()
+  const handler = async (assembly, context, next) => {
+    const out = await next()
+    try {
+      const session = context?.agent?.session
+      if (!session?.id || nudged.has(session.id)) return out
+      const text = await inboxNudge(settings)
+      if (!text) return out
+      nudged.add(session.id)
+      if (nudged.size > 500) nudged.delete(nudged.values().next().value)
+      return {
+        ...out,
+        contexts: [
+          ...(Array.isArray(out?.contexts) ? out.contexts : []),
+          { name: 'dsh-mesh:inbox', order: 1001, text: `<dsh-mesh-inbox>${text}</dsh-mesh-inbox>` },
+        ],
+      }
+    } catch {
+      return out
+    }
+  }
+  const off = ctx.on('system-prompt/assemble', handler)
+  return typeof off === 'function' ? off : () => {}
+}
+
 export function apply(ctx, config = {}) {
   const settings = settingsOf(config)
   const disposers = registerTools(ctx, settings)
@@ -90,6 +130,16 @@ export function apply(ctx, config = {}) {
   const disposeDashboard = registerDashboard(ctx, settings)
   registerNative(ctx, settings)
   const disposeRecall = registerRecall(ctx, settings)
+  const disposeCapture = registerCapture(ctx, settings)
+  const disposeNudge = registerInboxNudge(ctx, settings)
+
+  let backupTimer = null
+  if (settings.backupEnabled === true && settings.backupIntervalMinutes > 0) {
+    backupTimer = setInterval(() => {
+      snapshot(settings, 'interval').catch(() => {})
+    }, settings.backupIntervalMinutes * 60_000)
+    backupTimer.unref?.()
+  }
 
   // 初始化与 AGENTS 物化放在后台，避免拖慢宿主启动；失败只记录，不影响宿主。
   Promise.resolve()
@@ -119,6 +169,13 @@ export function apply(ctx, config = {}) {
       try {
         disposeRecall?.()
       } catch {}
+      try {
+        disposeCapture?.()
+      } catch {}
+      try {
+        disposeNudge?.()
+      } catch {}
+      if (backupTimer) clearInterval(backupTimer)
     }
   })
 }

@@ -19,6 +19,9 @@ import {
 } from './store.js'
 import { materializeAgents, previewAgents, previewSkills, syncSkills } from './agents.js'
 import { resolveUploadPath } from './policy.js'
+import { listInbox, readInbox, acceptInbox, rejectInbox } from './inbox.js'
+import { flushAllSessions, flushCurrent } from './capture.js'
+import { snapshot, listSnapshots, restoreSnapshot, scheduleSnapshot } from './backup.js'
 import {
   asObject,
   listHosts,
@@ -128,14 +131,24 @@ export function registerTools(ctx, settings) {
     parameters: {},
     async execute() {
       await ensureLayout(settings)
-      const [c, devices] = await Promise.all([counts(settings), updateDevices(settings)])
+      const [c, devices, inbox] = await Promise.all([counts(settings), updateDevices(settings), listInbox(settings)])
       return json({
         device: settings.deviceName,
         deviceSlug: settings.deviceSlug,
         memoryDir: settings.memoryDir,
         dshHome: settings.dshHome,
-        counts: c,
+        counts: { ...c, inbox: inbox.length },
         devices: devices.map((item) => item.name || item.deviceSlug),
+        capture: {
+          enabled: settings.captureEnabled,
+          idleMinutes: settings.captureIdleMinutes,
+          minTurns: settings.captureMinTurns,
+        },
+        backup: {
+          enabled: settings.backupEnabled,
+          debounceSeconds: settings.backupDebounceSeconds,
+          intervalMinutes: settings.backupIntervalMinutes,
+        },
         remoteTools: Boolean(ctx.tools.get('remote_list_hosts')),
         autoSyncAgents: settings.autoSyncAgents,
         syncSkills: settings.syncSkills,
@@ -186,6 +199,7 @@ export function registerTools(ctx, settings) {
         device: settings.deviceName,
       })
       // 只返回相对路径：不把宿主绝对路径写进模型上下文（P0-1/P3）。
+      scheduleSnapshot(settings, 'memory:write')
       return json({ ok: true, path: relOf(settings, file) })
     },
   })
@@ -242,6 +256,7 @@ export function registerTools(ctx, settings) {
         if (args[key] !== undefined) patch[key] = args[key]
       }
       const result = await updateNote(settings, args.path, patch)
+      scheduleSnapshot(settings, 'memory:update')
       return json({ ok: true, ...result })
     },
   })
@@ -257,6 +272,7 @@ export function registerTools(ctx, settings) {
       if (args.confirm !== true) throw new Error('删除需要 confirm:true（这是软删除，文件会进 .trash/）')
       await ensureLayout(settings)
       const result = await trashNote(settings, args.path)
+      scheduleSnapshot(settings, 'memory:delete')
       return json({ ok: true, ...result, hint: '已移入回收站，可用 mesh_memory_restore 恢复。' })
     },
   })
@@ -279,7 +295,90 @@ export function registerTools(ctx, settings) {
     async execute(args) {
       await ensureLayout(settings)
       const result = await restoreTrash(settings, args.path)
+      scheduleSnapshot(settings, 'memory:restore')
       return json({ ok: true, ...result })
+    },
+  })
+
+  add({
+    name: 'mesh_memory_inbox',
+    description:
+      '自动记录的会话摘要收件箱（本机，未确认前不进入正式记忆）。action=list 查看、read 读原文、accept 转正、reject 忽略、flush 立即整理当前缓冲。',
+    parameters: {
+      action: str('操作', { enum: ['list', 'read', 'accept', 'reject', 'flush'], required: true }),
+      path: str('草稿相对路径（read/accept/reject 用，来自 list 的 path）'),
+      kind: str('accept 时的目录分类', { enum: ['notes', 'facts', 'decisions', 'projects'] }),
+      title: str('accept 时的标题（默认用草稿标题）'),
+    },
+    async execute(args, exec) {
+      await ensureLayout(settings)
+      const action = String(args.action || 'list')
+      if (action === 'flush') {
+        const flushed = await flushAllSessions(settings, 'manual')
+        // 本 turn 的事件尚未提交时，从当前会话历史补全一份。
+        const current = exec?.agent?.session
+        if (current?.id && !flushed.some((item) => item.sessionId === current.id)) {
+          flushed.push(...(await flushCurrent(settings, current, 'manual')))
+        }
+        return json({ ok: true, flushed: flushed.length, items: flushed })
+      }
+      if (action === 'list') {
+        const items = await listInbox(settings)
+        return json({
+          ok: true,
+          count: items.length,
+          items,
+          hint: items.length
+            ? '用 read 看内容，accept 转成正式记忆（默认 notes），reject 忽略。'
+            : '暂无待确认的自动记录。会话结束或空闲后会自动出现。',
+        })
+      }
+      if (!args.path) throw new Error(`${action} 需要 path`)
+      if (action === 'read') {
+        const text = await readInbox(settings, args.path)
+        return json({ ok: true, path: args.path, text })
+      }
+      if (action === 'accept') {
+        const result = await acceptInbox(settings, args.path, {
+          kind: args.kind || 'notes',
+          title: args.title,
+        })
+        scheduleSnapshot(settings, 'inbox:accept')
+        return json({ ok: true, ...result })
+      }
+      if (action === 'reject') {
+        const result = await rejectInbox(settings, args.path)
+        scheduleSnapshot(settings, 'inbox:reject')
+        return json({ ok: true, ...result })
+      }
+      throw new Error(`未知 action：${action}`)
+    },
+  })
+
+  add({
+    name: 'mesh_memory_backup',
+    description: '共享记忆目录的本机 git 快照：snapshot 立刻快照、list 看历史、restore 还原到某个提交（需 confirm）。',
+    parameters: {
+      action: str('操作', { enum: ['snapshot', 'list', 'restore'], required: true }),
+      commit: str('restore 用的提交号（来自 list）'),
+      confirm: bool('restore 时必须为 true'),
+      limit: num('list 返回条数，默认 20'),
+    },
+    async execute(args) {
+      const action = String(args.action || 'snapshot')
+      if (action === 'snapshot') {
+        const result = await snapshot(settings, 'manual')
+        return json({ ok: true, ...result })
+      }
+      if (action === 'list') {
+        const items = await listSnapshots(settings, args.limit)
+        return json({ ok: true, count: items.length, items, dir: 'dsh-mesh-backups.git（$DSH_HOME 下，不同步）' })
+      }
+      if (action === 'restore') {
+        const result = await restoreSnapshot(settings, args.commit, { confirm: args.confirm === true })
+        return json({ ok: true, ...result })
+      }
+      throw new Error(`未知 action：${action}`)
     },
   })
 
@@ -336,6 +435,7 @@ export function registerTools(ctx, settings) {
       if (args.force === true || settings.syncSkills) {
         skillsApplied = await syncSkills(settings, { force: args.force === true })
       }
+      scheduleSnapshot(settings, 'sync:apply')
       return json({ ok: true, mode: 'apply', agents: applied, skills: skillsApplied })
     },
   })
@@ -385,6 +485,7 @@ export function registerTools(ctx, settings) {
         tags: args.tags || [],
       })
       await publishNativeManifest(settings).catch(() => {})
+      scheduleSnapshot(settings, 'memory:digest')
       return json({ ok: true, path: relOf(settings, file) })
     },
   })

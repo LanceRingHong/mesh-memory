@@ -2,7 +2,7 @@
 
 > 跨设备共享记忆 + DSH 委托，给 DeepSeek Harness 装上“不会失忆的第二大脑”。
 
-![version](https://img.shields.io/badge/version-0.6.0-blue)
+![version](https://img.shields.io/badge/version-0.7.0-blue)
 ![license](https://img.shields.io/github/license/LanceRingHong/dsh-mesh)
 ![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.x-8a2be2)
 ![Node](https://img.shields.io/badge/Node-%E2%89%A518-3c873a)
@@ -12,7 +12,7 @@
 - 通过 **DSH Remote** 委托另一台设备建会话、执行任务、读结果、传文件。
 - 桌面有侧栏/顶栏入口，DSH Go 有原生记忆页。
 
-> 当前版本 `0.6.0`（记忆生命周期 + 检索一致性 + 可运维性），MIT。DSH Go 原生记忆页的配套 PR：
+> 当前版本 `0.7.0`（无感记忆 P1：自动记录 + 收件箱 + git 快照），MIT。DSH Go 原生记忆页的配套 PR：
 > [dsh-go #168](https://github.com/ccch1mneyyy/dsh-Go/pull/168)（Ready for review）。
 
 ---
@@ -59,6 +59,8 @@ DSH 默认每个会话都是新的。`dsh-mesh` 把“该记住的事”写成 M
 | 自动召回 | 每轮 BM25 检索，注入 `<dsh-mesh-memory>`；带预算和去重 |
 | 记忆 schema | `description`、`memoryType`、`tags`、`aliases`、`baseline`、`validAt`、`invalidAt`、`supersededBy` |
 | 记忆生命周期 | `mesh_memory_update`、软删除到 `.trash/`、恢复；冲突副本用 `mesh_conflicts` 列出 |
+| 自动记录 | 会话事件 → 本机收件箱草稿（机械摘要，不调模型）；确认后转正式记忆 |
+| 自动备份 | 共享目录快照到本机 git（`$DSH_HOME/dsh-mesh-backups.git`，不进同步目录） |
 | 跨设备委托 | `mesh_run` / `mesh_wait` / `mesh_send` / `mesh_read` / `mesh_interrupt` / `mesh_peers` / `mesh_workspaces` |
 | 文件传输 | `mesh_send_file` / `mesh_fetch_file`（受 Remote 工作区与大小限制） |
 | 桌面 UI | 侧栏底部、对话顶部、对话「记忆」标签；完整树 + Markdown 预览 |
@@ -205,6 +207,12 @@ mesh_status
 | `allowedUploadRoots` | `[]` → 共享记忆目录 + `~/Downloads` | 允许 `mesh_send_file` 上传的本机目录 |
 | `dashboardToken` | `''` | 独立只读页面的访问 token；留空不校验（仍只绑定 127.0.0.1） |
 | `maxSkillBytes` | `2000000` | 单个共享 skill 目录的大小上限；超限或含符号链接时拒绝同步 |
+| `captureEnabled` | `true` | 自动把完成的会话写成收件箱草稿（本机，不同步） |
+| `captureIdleMinutes` | `5` | 会话空闲多久后生成草稿 |
+| `captureMinTurns` | `2` | 至少多少轮才记录（压缩过的长会话按消息条数兜底） |
+| `backupEnabled` | `true` | 把共享记忆目录快照到本机 git |
+| `backupDebounceSeconds` | `60` | 写入后合并成一个快照的等待时间 |
+| `backupIntervalMinutes` | `360` | 定时快照间隔；`0` 关闭 |
 
 多设备时每台设备用不同 `deviceName`，避免摘要目录混在一起。
 
@@ -295,6 +303,8 @@ supersededBy: "memory/facts/newer.md"
 | `mesh_memory_update` | 就地更新一条记忆（保留 id/createdAt） |
 | `mesh_memory_delete` | 软删除到 `.trash/`（需 `confirm:true`） |
 | `mesh_memory_trash` / `mesh_memory_restore` | 列出回收站 / 按原路径恢复 |
+| `mesh_memory_inbox` | 自动记录草稿：`list` / `read` / `accept` / `reject` / `flush` |
+| `mesh_memory_backup` | 本机 git 快照：`snapshot` / `list` / `restore`（需 confirm） |
 | `mesh_conflicts` | 列出 Syncthing 冲突副本 |
 
 `mesh_memory_sync` 的两步用法：

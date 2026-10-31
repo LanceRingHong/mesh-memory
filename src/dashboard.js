@@ -9,6 +9,7 @@ import {
   listConflicts,
   updateDevices,
 } from './store.js'
+import { listInbox, readInbox } from './inbox.js'
 
 const HTML = `<!doctype html>
 <html lang="zh-CN">
@@ -78,6 +79,8 @@ pre{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padd
     <div class="hint" id="viewPath"></div>
     <h2 style="margin-top:16px">设备</h2>
     <div id="devices"></div>
+    <h2 style="margin-top:16px">待确认记忆</h2>
+    <div class="list" id="inbox"><div class="empty">加载中…</div></div>
   </div>
 </div>
 </div>
@@ -87,18 +90,25 @@ const esc=(s)=>String(s??'').replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>
 async function api(p){const r=await fetch(p,{cache:'no-store'});const j=await r.json();if(!j.ok)throw new Error(j.error||'request failed');return j;}
 function item(row,kind){const d=document.createElement('div');d.className='item';d.dataset.path=row.path;d.innerHTML='<div class="t">'+esc(row.title||row.path)+'</div><div class="p">'+esc(kind?kind+' · ':'')+esc(row.path)+'</div>';d.onclick=()=>openFile(row.path);return d;}
 async function openFile(p){try{const j=await api('/dsh-mesh/api/file?path='+encodeURIComponent(p));$('#view').textContent=j.text;$('#viewPath').textContent=p;}catch(e){$('#view').textContent='读取失败：'+e.message;}}
+async function openInboxFile(p){try{const j=await api('/dsh-mesh/api/inbox/file?path='+encodeURIComponent(p));$('#view').textContent=j.text;$('#viewPath').textContent=p;}catch(e){$('#view').textContent='读取失败：'+e.message;}}
 async function load(){
   try{
     const j=await api('/dsh-mesh/api/status');
     $('#sub').textContent=j.device+' · '+j.memoryDir+(j.loopbackOnly?' · 仅本机':'');
     const c=j.counts||{};
-    const cards=[['事实',c.facts],['决策',c.decisions],['项目',c.projects],['笔记',c.notes],['会话摘要',c.sessions]];
+    const cards=[['事实',c.facts],['决策',c.decisions],['项目',c.projects],['笔记',c.notes],['会话摘要',c.sessions],['待确认',c.inbox]];
     $('#cards').innerHTML=cards.map(([l,n])=>'<div class="card"><div class="n">'+(n??0)+'</div><div class="l">'+l+'</div></div>').join('');
     $('#recent').innerHTML='';
     const rows=[...(j.recentFacts||[]),...(j.recentSessions||[])];
     if(!rows.length)$('#recent').innerHTML='<div class="empty">还没有记忆条目。</div>';
     rows.forEach((r)=>$('#recent').appendChild(item(r)));
     $('#devices').innerHTML=(j.devices||[]).length?(j.devices.map((d)=>'<span class="pill">'+esc(d.name||d.deviceSlug||d.deviceId||'device')+'</span>').join('')):'<div class="empty">index/devices.json 为空；配对设备后由插件维护。</div>';
+    try{
+      const ib=await api('/dsh-mesh/api/inbox');
+      $('#inbox').innerHTML='';
+      if(!ib.items.length){$('#inbox').innerHTML='<div class="empty">没有待确认的自动记录。会话结束或空闲后会出现。</div>';}
+      ib.items.slice(0,10).forEach((r)=>{const d=document.createElement('div');d.className='item';d.innerHTML='<div class="t">'+esc(r.title||r.path)+'</div><div class="p">'+esc(r.updatedAt||r.createdAt||'')+' · '+esc(r.turns)+' 轮</div>';d.onclick=()=>openInboxFile(r.path);$('#inbox').appendChild(d);});
+    }catch(e){$('#inbox').innerHTML='<div class="empty">读取失败：'+esc(e.message)+'</div>';}
   }catch(e){$('#sub').textContent='加载失败：'+e.message;}
 }
 async function search(){
@@ -181,7 +191,11 @@ export function registerDashboard(ctx, settings) {
         }
         if (pathname === '/dsh-mesh/api/status') {
           await ensureLayout(settings)
-          const [c, devices] = await Promise.all([counts(settings), updateDevices(settings).catch(() => [])])
+          const [c, devices, inbox] = await Promise.all([
+            counts(settings),
+            updateDevices(settings).catch(() => []),
+            listInbox(settings).catch(() => []),
+          ])
           const [recentFacts, recentSessions] = await Promise.all([
             recentFiles(settings, 'memory/facts', 10),
             recentFiles(settings, 'sessions', 10),
@@ -192,7 +206,17 @@ export function registerDashboard(ctx, settings) {
             deviceSlug: settings.deviceSlug,
             memoryDir: settings.memoryDir,
             dshHome: settings.dshHome,
-            counts: c,
+            counts: { ...c, inbox: inbox.length },
+            capture: {
+              enabled: settings.captureEnabled,
+              idleMinutes: settings.captureIdleMinutes,
+              minTurns: settings.captureMinTurns,
+            },
+            backup: {
+              enabled: settings.backupEnabled,
+              debounceSeconds: settings.backupDebounceSeconds,
+              intervalMinutes: settings.backupIntervalMinutes,
+            },
             devices: devices.length ? devices : [{ name: settings.deviceName, deviceSlug: settings.deviceSlug }],
             recentFacts,
             recentSessions,
@@ -200,6 +224,18 @@ export function registerDashboard(ctx, settings) {
             dashboardListening: listening,
             tokenRequired: Boolean(settings.dashboardToken),
           })
+          return
+        }
+        if (pathname === '/dsh-mesh/api/inbox') {
+          await ensureLayout(settings)
+          const items = await listInbox(settings)
+          writeJson(res, 200, { ok: true, count: items.length, items })
+          return
+        }
+        if (pathname === '/dsh-mesh/api/inbox/file') {
+          const rel = url.searchParams.get('path') || ''
+          const text = await readInbox(settings, rel)
+          writeJson(res, 200, { ok: true, path: rel, text: text.slice(0, 200000) })
           return
         }
         if (pathname === '/dsh-mesh/api/conflicts') {

@@ -69,6 +69,15 @@ export function settingsOf(config = {}) {
     dashboardToken: String(config.dashboardToken || '').trim(),
     // skills 同步上限（P2-6）：超过则跳过，避免同步目录塞进巨型技能。
     maxSkillBytes: clamp(config.maxSkillBytes, 100_000, 20_000_000, 2_000_000),
+    // 自动记录（方案 A P1）：会话事件 → 本机收件箱草稿，默认开启、不写共享目录。
+    captureEnabled: config.captureEnabled !== false,
+    captureIdleMinutes: clamp(config.captureIdleMinutes, 1, 240, 5),
+    captureMinTurns: clamp(config.captureMinTurns, 1, 50, 2),
+    // git 快照：git 目录在 $DSH_HOME，不在同步目录里。
+    backupEnabled: config.backupEnabled !== false,
+    backupDebounceSeconds: clamp(config.backupDebounceSeconds, 5, 3600, 60),
+    backupIntervalMinutes: clamp(config.backupIntervalMinutes, 0, 1440, 360),
+    inboxMaxDrafts: clamp(config.inboxMaxDrafts, 1, 500, 100),
   }
 }
 
