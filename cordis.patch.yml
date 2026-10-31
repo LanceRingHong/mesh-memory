@@ -1,0 +1,14 @@
+# dsh-mesh bundle patch
+#
+# 安装（桌面版 CLI）：
+#   dsh plugin --profile desktop add -w <本目录>
+# 或手工把本目录复制到
+#   %USERPROFILE%\.dsh\profiles\desktop\node_modules\dsh-mesh
+# 并把 "dsh-mesh" 加进 profile package.json 的 dsh.profile.bundles。
+- insert:
+    - id: dsh-mesh
+      name: dsh-mesh
+      config:
+        memoryDir: ''
+        autoSyncAgents: false
+        syncSkills: false
