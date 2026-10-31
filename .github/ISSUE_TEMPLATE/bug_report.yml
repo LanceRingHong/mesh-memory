@@ -1,0 +1,63 @@
+name: Bug report
+description: 报告 dsh-mesh 的可复现问题
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请不要贴 token、私钥、完整会话或含个人信息的记忆正文。
+  - type: input
+    id: version
+    attributes:
+      label: dsh-mesh 版本
+      placeholder: 0.4.5
+    validations:
+      required: true
+  - type: input
+    id: dsh
+    attributes:
+      label: DSH 版本
+      placeholder: 0.2.1-rc.5
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台
+      options:
+        - Windows 桌面 DSH
+        - macOS/Linux 桌面 DSH
+        - DSH Go 本机引擎
+        - DSH Go 远程界面
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: 1. ... 2. ... 3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望结果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果/错误文本
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 确认
+      options:
+        - label: 已阅读 docs/TROUBLESHOOTING.md
+          required: true
+        - label: 已移除 token、私钥、完整会话和敏感记忆
+          required: true

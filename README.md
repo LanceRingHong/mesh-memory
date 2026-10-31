@@ -1,13 +1,18 @@
 # dsh-mesh
 
-**给 DeepSeek Harness（DSH）装上跨设备共享记忆，并让一台设备指挥另一台设备的 DSH 干活。**
+> 跨设备共享记忆 + DSH 委托，给 DeepSeek Harness 装上“不会失忆的第二大脑”。
 
-- 每条记忆是一个本地 Markdown 文件，不用数据库、不藏格式。
-- 设备之间用 Syncthing 同步目录，不经过第三方记忆云。
-- 通过 DSH Remote 委托另一台设备建会话、执行任务、读结果、传文件。
+![version](https://img.shields.io/badge/version-0.4.5-blue)
+![license](https://img.shields.io/github/license/LanceRingHong/dsh-mesh)
+![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.x-8a2be2)
+![Node](https://img.shields.io/badge/Node-%E2%89%A518-3c873a)
+
+- 每条记忆都是本地 Markdown 文件，不用数据库、不藏格式。
+- 多设备用 **Syncthing** 同步目录，不把记忆交给第三方云。
+- 通过 **DSH Remote** 委托另一台设备建会话、执行任务、读结果、传文件。
 - 桌面有侧栏/顶栏入口，DSH Go 有原生记忆页。
 
-> 当前版本：`0.4.5`（MIT）。DSH 原生记忆页的 Go 端配套 PR 见
+> 当前版本 `0.4.5`，MIT。DSH Go 原生记忆页的配套 PR：
 > [dsh-go #168](https://github.com/ccch1mneyyy/dsh-Go/pull/168)（Ready for review）。
 
 ---
@@ -17,17 +22,21 @@
 - [它解决什么问题](#它解决什么问题)
 - [功能](#功能)
 - [架构](#架构)
+- [依赖与上游](#依赖与上游)
+- [兼容性](#兼容性)
 - [安装](#安装)
 - [配置](#配置)
 - [快速开始](#快速开始)
 - [记忆格式](#记忆格式)
 - [自动召回](#自动召回)
-- [工具](#工具)
+- [工具与 API](#工具与-api)
 - [界面](#界面)
-- [跨设备同步](#跨设备同步)
+- [Syncthing：跨设备记忆](#syncthing跨设备记忆)
 - [安全与边界](#安全与边界)
-- [开发](#开发)
-- [License](#license)
+- [故障排查](#故障排查)
+- [卸载](#卸载)
+- [开发与贡献](#开发与贡献)
+- [License 与致谢](#license-与致谢)
 
 ---
 
@@ -36,9 +45,11 @@
 DSH 默认每个会话都是新的。`dsh-mesh` 把“该记住的事”写成 Markdown 卡片，放在所有设备都能读的目录里；在模型开口前，插件按当前问题挑出相关卡片注入上下文。它还能把任务交给另一台设备上的 DSH，适合“家里 PC 算力强、平板随身”的场景。
 
 **不是**：
+
 - 不是数据库/向量库，不藏二进制。
 - 不同步原始 zstd 会话（单写者，会冲突）。
 - 不做任意 Android 私有目录访问。
+- 不替 DSH Remote 做账号或中继。
 
 ## 功能
 
@@ -69,7 +80,7 @@ DSH 插件宿主
        ├─ src/remote.js       remote_* 包装
        └─ src/config.js       配置
 
-共享目录
+共享目录（可被 Syncthing 同步）
   ├─ AGENTS.shared.md
   ├─ skills/mesh-memory/SKILL.md
   ├─ memory/{facts,decisions,projects,notes}/
@@ -78,9 +89,45 @@ DSH 插件宿主
   └─ .mesh/skills.json
 ```
 
+跨设备时：
+
+```
+PC DSH ──dsh-mesh──┐
+                   ├── Syncthing folder ── 共享 Markdown
+平板 DSH ──dsh-mesh─┘
+
+PC DSH ──ds-harness-remote Host ◀── DSH Remote ──▶ 平板 DSH
+```
+
+## 依赖与上游
+
+| 组件 | 作用 | 是否必需 | 说明 |
+|---|---|---|---|
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) | 插件宿主/会话/工具 | 必需 | 本项目是 DSH 插件，不修改 DSH 本体 |
+| Node.js ≥ 18 | 插件运行时 | 必需 | DSH 自带 Node 也行 |
+| [ds-harness-remote](https://github.com/liguobao/ds-harness-remote) | DSH Remote 主机插件/中继 | 可选 | 只有“跨设备委托/读会话/传文件”才需要；第三方，MIT |
+| [Syncthing](https://syncthing.net/) | 多设备目录同步 | 可选 | 只有“跨设备共享记忆”才需要；MPL-2.0 |
+| [DSH Go](https://github.com/ccch1mneyyy/dsh-go) | Android 原生界面 | 可选 | 原生记忆页见配套 PR #168；DSH Go 自身 AGPL-3.0，与本插件 MIT 独立 |
+| 浏览器 | 只读记忆页 | 可选 | 只访问 `127.0.0.1:8765` |
+
+> 本仓库只包含 `dsh-mesh` 自己的 MIT 代码；不包含 DSH、DSH Go、DSH Remote、Syncthing 的源码。上游组件的许可证、安装方式、账号与隐私边界由各自项目负责。
+
+更详细的上游说明见 [`docs/UPSTREAM.md`](docs/UPSTREAM.md)。
+
+## 兼容性
+
+| 项目 | 版本 |
+|---|---|
+| DSH 核心 | 实测 `0.2.1-rc.5`；需要支持 `system-prompt/assemble` 与 `dsh.client` |
+| Node.js | ≥ 18 |
+| 桌面 | Windows（实测）、macOS/Linux（按 DSH 支持） |
+| 移动 | DSH Go 本机引擎/Android 实测 |
+| Syncthing | 任意 2.x |
+| DSH Remote | 实测 `ds-harness-remote` 0.6.x |
+
 ## 安装
 
-要求：DSH `0.2.1-rc.x` 或更高、Node.js ≥ 18；跨设备另需 DSH Remote 与 Syncthing。
+本插件目前**不在 npm/插件市场发布**；从本仓库安装。
 
 ```powershell
 git clone https://github.com/LanceRingHong/dsh-mesh.git
@@ -95,12 +142,13 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Profiles desktop
 ```
 
 脚本会：
+
 1. 复制插件到 `<profile>/node_modules/dsh-mesh`；
 2. 备份 profile `package.json`；
 3. 把 `dsh-mesh` 加进 `dsh.profile.bundles`；
 4. 向 `cordis.patch.yml` 追加注释，触发热加载。
 
-> `desktop` profile 被 Electron 独占时，用桌面版自带的 CLI/安装方式；CLI 操作 `web` profile。
+> 桌面版 `desktop` profile 被 Electron 独占时，用桌面版自带 CLI/安装方式；CLI 操作 `web` profile。
 
 ### Android / 本机 Go
 
@@ -110,7 +158,15 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Profiles desktop
 /root/.dsh/profiles/web/node_modules/dsh-mesh
 ```
 
-并把 `dsh-mesh` 加进该 profile 的 `dsh.profile.bundles`；追加 `cordis.patch.yml` 注释触发重载。引擎代码改动需要重启引擎，客户端 UI 需要重开 App/刷新页面。
+把 `dsh-mesh` 加进该 profile 的 `dsh.profile.bundles`，再追加 `cordis.patch.yml` 注释触发热加载。引擎代码改动需要重启引擎；客户端 UI 需要重开 App/刷新页面。
+
+### 安装后检查
+
+```text
+mesh_status
+```
+
+应返回 `device`、`memoryDir`、`counts`、`remoteTools`、`dashboardUrl`。
 
 ## 配置
 
@@ -137,6 +193,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Profiles desktop
 | `syncSkills` | `false` | 启动时复制共享 skills |
 | `autoRecall` | `true` | 每轮自动检索并注入记忆 |
 | `dashboardPort` | `8765` | 独立只读页面端口，仅 127.0.0.1 |
+
+多设备时每台设备用不同 `deviceName`，避免摘要目录混在一起。
 
 ## 快速开始
 
@@ -189,6 +247,7 @@ supersededBy: "memory/facts/newer.md"
 - `memoryType`：语义类型（user/feedback/project/reference）。
 - `invalidAt <= now` 或 `supersededBy` 生效的条目不进自动召回。
 - `baseline: true` 每场固定注入，按 `baselinePriority` 排序，最多 3 条。
+- `description` 建议写成单行；YAML 折叠块（`>`）在原生 manifest 里可能只显示首行。
 
 ## 自动召回
 
@@ -203,7 +262,7 @@ supersededBy: "memory/facts/newer.md"
 
 这是词面检索，不是语义向量；同义说法请写 `aliases`。
 
-## 工具
+## 工具与 API
 
 | 工具 | 作用 |
 |---|---|
@@ -254,21 +313,46 @@ http://127.0.0.1:8765/
 
 只绑定回环；独立页面不依赖 DSH 登录，完整树入口在桌面/Go 客户端。
 
-## 跨设备同步
+## Syncthing：跨设备记忆
 
-推荐 **Syncthing**：
+**Syncthing 不是插件运行必需；没有它，每台设备只用自己的记忆目录。** 要让 PC/平板共享 facts、AGENTS、sessions，才需要它。
 
-1. 两台设备安装 Syncthing，互相配对；
-2. 建 folder，路径分别指向各自的 `memoryDir`；
-3. 等同步 100%；
-4. 设备名写进各自配置，摘要分别落在 `sessions/<device>/`。
+### 最小步骤
 
-注意：
+1. 两台设备安装 Syncthing（PC 可用 portable/服务，Android 用 App）。
+2. 互相添加设备 ID，接受对方。
+3. 新建 folder，Folder ID 都填 `dsh-mesh`；路径分别指向：
+   - PC：`C:\Users\<you>\DSH-mesh`
+   - Android：`/sdcard/DSH-mesh`
+4. 共享给另一台设备，等状态到 **100% / Up to Date**。
+5. 每台设备在 dsh-mesh 配置里写不同 `deviceName`。
+6. 先在一台设备写入一条测试记忆，另一台确认能读到，再开始正式使用。
 
-- 同一 `~/.dsh` 只允许一个 DSH 写入宿主。
-- 不要同步原始 zstd 会话。
-- Syncthing 冲突会生成 `.sync-conflict-*`，当前需要人工处理。
-- `AGENTS.shared.md` 是跨设备规则；设备专属规则留在各自 `AGENTS.md`。
+### 推荐 `.stignore`
+
+```
+(?d).stversions
+(?d).sync-conflict-*
+```
+
+- `.stversions` 是 Syncthing 的版本历史，不需要同步给对端。
+- `.sync-conflict-*` 建议保留在目录里让人看见；如果忽略，冲突会被静默隐藏，不推荐默认忽略。
+- 不要把原始 `sessions/`（zstd 会话）同步进来；dsh-mesh 只同步 `sessions/<device>/*.md` 摘要。
+
+### 冲突与版本
+
+- 两台设备同时改同一文件时，Syncthing 生成 `.sync-conflict-*`；dsh-mesh 的树会显示，自动召回会跳过冲突文件。
+- 当前**没有自动裁决/合并**；需要人工保留正确版本。
+- 建议开启 Syncthing 版本历史，误删可恢复。
+- 同一 `~/.dsh` 只允许一个 DSH 写入宿主；不要用 Syncthing 同步 `.dsh` 本身。
+
+### Android 注意
+
+- Syncthing App 需要保持后台运行；关闭电池优化。
+- `/sdcard` 受 Android 共享存储权限限制；DSH Remote 文件传输失败时优先用 `/root/workspace`，或让目标端 Agent 直接操作 `/sdcard`。
+- 平板和 PC 的 folder 路径不同没关系，Folder ID 一致即可。
+
+更详细的操作、端口、开机启动、故障排查见 [`docs/SYNCTHING.md`](docs/SYNCTHING.md)。
 
 ## 安全与边界
 
@@ -278,18 +362,55 @@ http://127.0.0.1:8765/
 - 下载 ≤50 MiB；上传中继 ≤20 MiB、P2P ≤1 GiB；只限工作区。
 - Android `/sdcard` 工作区的 Remote 上传/下载可能失败，优先 `/root/workspace`。
 - `mesh_run` 目标端按自己的权限执行，不会提权；审批由目标端处理。
+- Syncthing 的发现/中继服务器、DSH Remote 的账号/中继属于第三方边界，请按自己的隐私要求配置。
 
-## 开发
+## 故障排查
 
-```bash
-npm test          # 目前无 npm 测试；用 node --check + install smoke
+| 现象 | 先检查 |
+|---|---|
+| `mesh_status` 报错 | profile 是否加进 `dsh.profile.bundles`；`memoryDir` 是否存在 |
+| 记忆页空白 | `mesh_memory_write` 是否写过；`/dsh-mesh/api/tree` 是否有数据 |
+| 自动召回不生效 | `autoRecall` 是否 true；DSH 是否支持 `system-prompt/assemble` |
+| 另一台设备看不到新记忆 | Syncthing 是否 100%；folder 路径是否写对；是否有 `.sync-conflict-*` |
+| Go 顶栏没有「记忆」 | 是否装了带原生页的测试 APK；host `ui.json` 是否有 `page:"memory"` action |
+| `mesh_run` 失败 | DSH Remote 是否登录；目标 Host 是否在线；工作区是否存在 |
+| `/sdcard` 传文件失败 | 改用 `/root/workspace`，或让目标端 Agent 操作 |
+
+更多见 [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)。
+
+## 卸载
+
+```powershell
+# 从 profile 的 package.json 移除 dsh-mesh 依赖/bundle 后：
+Remove-Item <profile>\node_modules\dsh-mesh -Recurse -Force
+```
+
+- 共享记忆目录**不会**被删除；需要时手动备份/删除。
+- 设备级 `AGENTS.md` 里的 `dsh-mesh` 托管块可以用 `mesh_memory_sync` 之前先备份，或手动删除标记之间内容。
+- Syncthing folder 独立于插件；卸载插件不会删除同步目录。
+
+## 开发与贡献
+
+```powershell
 node --check index.js
 node --check src/store.js
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Profiles desktop
 ```
 
-开发文档：仓库 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
+- 架构：[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- Syncthing 详细指南：[`docs/SYNCTHING.md`](docs/SYNCTHING.md)
+- 上游/许可证：[`docs/UPSTREAM.md`](docs/UPSTREAM.md)
+- 变更记录：[`CHANGELOG.md`](CHANGELOG.md)
+- 贡献指南：[`CONTRIBUTING.md`](CONTRIBUTING.md)
 
-## License
+欢迎 Issue/PR；涉及上游 DSH Go 的改动请同时看 [PR #168](https://github.com/ccch1mneyyy/dsh-Go/pull/168)。
 
-MIT © 2026 LanceRingHong
+## License 与致谢
+
+- 本仓库：MIT，见 [`LICENSE`](LICENSE)。
+- DSH：按其仓库许可证。
+- DSH Remote：第三方 MIT。
+- Syncthing：MPL-2.0。
+- DSH Go：AGPL-3.0（独立项目；本仓库不包含其代码）。
+
+感谢 DSH、DSH Remote、Syncthing、DSH Go 的维护者与社区。

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 上游 DSH
+    url: https://github.com/deepseek-ai/deepseek-harness
+    about: DSH 本体/插件宿主问题
+  - name: DSH Go
+    url: https://github.com/ccch1mneyyy/dsh-go
+    about: Android 原生界面问题
+  - name: DSH Remote
+    url: https://github.com/liguobao/ds-harness-remote
+    about: Remote 登录/中继/主机问题

@@ -3,6 +3,18 @@
   "version": "0.4.5",
   "private": true,
   "description": "DSH Mesh: shared memory (AGENTS/skills/summaries) and cross-device DSH delegation over DSH Remote.",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "memory",
+    "syncthing",
+    "remote",
+    "markdown"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "type": "module",
   "main": "index.js",
   "exports": {

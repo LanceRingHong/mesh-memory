@@ -1,0 +1,37 @@
+name: Feature request
+description: 提出新功能或改进
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 想解决什么问题
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: 范围
+      options:
+        - 记忆/召回
+        - 桌面 UI
+        - DSH Go 原生页
+        - Syncthing/同步
+        - DSH Remote/委托
+        - 文档/安装
+        - 其他
+    validations:
+      required: true
+  - type: checkboxes
+    id: upstream
+    attributes:
+      label: 上游
+      options:
+        - label: 这个需求需要改 DSH / DSH Go / DSH Remote 本体，而不只是 dsh-mesh
