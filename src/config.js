@@ -2,6 +2,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+function clamp(value, min, max, fallback) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, n))
+}
+
 export function defaultMemoryDir() {
   const env = (process.env.DSH_MESH_DIR || '').trim()
   if (env) return path.resolve(env)
@@ -12,6 +18,18 @@ export function defaultMemoryDir() {
     } catch {}
   }
   return path.join(os.homedir(), 'DSH-mesh')
+}
+
+/**
+ * 上传白名单的默认值：共享记忆目录 + 用户下载目录。
+ * 其余路径必须在插件配置 allowedUploadRoots 里显式声明（0.4.6 起，P0-3）。
+ */
+export function defaultUploadRoots(memoryDir) {
+  const roots = [path.resolve(memoryDir)]
+  try {
+    roots.push(path.join(os.homedir(), 'Downloads'))
+  } catch {}
+  return [...new Set(roots)]
 }
 
 export function slugify(value) {
@@ -26,6 +44,9 @@ export function settingsOf(config = {}) {
   const dshHome = (process.env.DSH_HOME || '').trim()
     ? path.resolve(process.env.DSH_HOME)
     : path.join(os.homedir(), '.dsh')
+  const configuredRoots = Array.isArray(config.allowedUploadRoots)
+    ? config.allowedUploadRoots.map((item) => String(item || '').trim()).filter(Boolean).map((item) => path.resolve(item))
+    : []
   return {
     memoryDir,
     deviceName,
@@ -34,9 +55,16 @@ export function settingsOf(config = {}) {
     autoSyncAgents: config.autoSyncAgents === true,
     syncSkills: config.syncSkills === true,
     autoRecall: config.autoRecall !== false,
-    dashboardPort: Math.min(65535, Math.max(1024, Number(config.dashboardPort) || 8765)),
-    maxSearchResults: Math.min(100, Math.max(1, Number(config.maxSearchResults) || 20)),
-    maxFileBytes: Math.min(5_000_000, Math.max(1_000, Number(config.maxFileBytes) || 200_000)),
+    dashboardPort: clamp(config.dashboardPort, 1024, 65535, 8765),
+    maxSearchResults: clamp(config.maxSearchResults, 1, 100, 20),
+    maxFileBytes: clamp(config.maxFileBytes, 1_000, 5_000_000, 200_000),
+    // 召回：候选文件数、单文件大小、最低分、注入预算（0.4.6 起可配，P1-5/P1-6/P1-10）
+    maxRecallFiles: clamp(config.maxRecallFiles, 1, 20_000, 1000),
+    maxRecallFileBytes: clamp(config.maxRecallFileBytes, 10_000, 10_000_000, 1_000_000),
+    recallMinScore: clamp(config.recallMinScore, 0, 1000, 0),
+    recallMaxChars: clamp(config.recallMaxChars, 1000, 20_000, 6000),
+    // 上传白名单（P0-3）：默认只允许共享目录与 Downloads，其余显式配置。
+    allowedUploadRoots: configuredRoots.length ? configuredRoots : defaultUploadRoots(memoryDir),
   }
 }
 

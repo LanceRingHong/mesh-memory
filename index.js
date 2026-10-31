@@ -22,6 +22,14 @@ export const Config = Schema.object({
   autoRecall: Schema.boolean().default(true).description('每轮对话按问题自动检索相关记忆并注入上下文（默认开启）。'),
   dashboardPort: Schema.number().default(8765).description('只读记忆页面的本机端口（仅绑定 127.0.0.1）。'),
   maxSearchResults: Schema.number().default(20).description('mesh_memory_search 默认返回条数。'),
+  maxFileBytes: Schema.number().default(200000).description('单个记忆文件的读取上限（字节）。'),
+  maxRecallFiles: Schema.number().default(1000).description('自动召回的候选文件上限，按修改时间倒序取。'),
+  maxRecallFileBytes: Schema.number().default(1000000).description('参与召回的单个文件大小上限（字节）。'),
+  recallMinScore: Schema.number().default(0).description('自动召回的最低 BM25 绝对分；默认 0（只用相对门槛与词项特异性）。'),
+  recallMaxChars: Schema.number().default(6000).description('每轮注入召回文本的字符预算。'),
+  allowedUploadRoots: Schema.array(Schema.string())
+    .default([])
+    .description('允许 mesh_send_file 上传的本机目录；留空时默认共享记忆目录 + 用户 Downloads。'),
 })
 
 const SKILL = `# dsh-mesh：跨设备共享记忆与委托

@@ -1,6 +1,4 @@
-import fs from 'node:fs/promises'
 import http from 'node:http'
-import path from 'node:path'
 import { ensureLayout, counts, searchMemory, readMemory, recentFiles, treeMemory } from './store.js'
 
 const HTML = `<!doctype html>
@@ -85,7 +83,7 @@ async function load(){
     const j=await api('/dsh-mesh/api/status');
     $('#sub').textContent=j.device+' · '+j.memoryDir+(j.loopbackOnly?' · 仅本机':'');
     const c=j.counts||{};
-    const cards=[['事实',c.facts],['决策',c.decisions],['项目',c.projects],['会话摘要',c.sessions]];
+    const cards=[['事实',c.facts],['决策',c.decisions],['项目',c.projects],['笔记',c.notes],['会话摘要',c.sessions]];
     $('#cards').innerHTML=cards.map(([l,n])=>'<div class="card"><div class="n">'+(n??0)+'</div><div class="l">'+l+'</div></div>').join('');
     $('#recent').innerHTML='';
     const rows=[...(j.recentFacts||[]),...(j.recentSessions||[])];
@@ -135,7 +133,7 @@ function loopbackFence(req) {
 
 async function readDevices(settings) {
   try {
-    const raw = await fs.readFile(`${settings.memoryDir}/index/devices.json`, 'utf8')
+    const raw = await readMemory(settings, 'index/devices.json')
     const data = JSON.parse(raw)
     return Array.isArray(data.devices) ? data.devices : []
   } catch {

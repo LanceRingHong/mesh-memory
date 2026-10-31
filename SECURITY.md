@@ -16,9 +16,22 @@
 - Syncthing / DSH Remote 的传输、账号、中继由各自项目负责。
 - 不要把 `~/.dsh` 放进 Syncthing，也不要把 8384/8765 暴露到公网。
 
+### 0.4.6 起强制的边界
+
+- **读取**：只读共享目录内的普通文件；符号链接/目录联接被拒绝，`realpath` 必须仍在共享目录内；单文件大小受限。
+- **写入**：`mesh_digest` 的 `sessionId` 走白名单；记忆文件用临时文件 + `rename`；`AGENTS.md` 托管块会转义 `<!-- dsh-mesh:* -->` 标记并保留 10 份备份。
+- **上传**：`mesh_send_file` 只允许 `allowedUploadRoots` 内的文件；`.env`、`id_*`、`*.pem`、`*.key`、`*.jks`、`.ssh/` 等永远拒绝。
+
+### 已知未覆盖（计划 0.5.x）
+
+- `mesh_memory_sync` 仍可被 Agent 直接调用（有备份、标记转义、空内容保护，但**没有**用户二次确认）。
+- 嵌套 Remote 调用尚未经过 DSH 的 `tools/pre-execute` 审批链。
+- 没有加密选项；共享目录里的敏感记忆仍以明文同步。
+- 召回是词面 BM25，不保证语义准确；恶意记忆条目的注入风险由“数据不是指令”约束承担，未做内容审查。
+
 ## 建议
 
 - 敏感记忆自行加密/脱敏后再写入。
 - 使用专用设备/账户运行 DSH；限制共享目录权限。
 - 定期备份记忆目录与会话备份。
-- 升级前先备份 profile 配置与 `node_modules/dsh-mesh`。
+- 升级前先备份 profile 配置与 `node_modules/dsh-mesh`；`install.ps1 -Rollback` 可回到上一个备份。

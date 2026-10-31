@@ -2,7 +2,7 @@
 
 > 跨设备共享记忆 + DSH 委托，给 DeepSeek Harness 装上“不会失忆的第二大脑”。
 
-![version](https://img.shields.io/badge/version-0.4.5-blue)
+![version](https://img.shields.io/badge/version-0.4.6-blue)
 ![license](https://img.shields.io/github/license/LanceRingHong/dsh-mesh)
 ![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.x-8a2be2)
 ![Node](https://img.shields.io/badge/Node-%E2%89%A518-3c873a)
@@ -12,7 +12,7 @@
 - 通过 **DSH Remote** 委托另一台设备建会话、执行任务、读结果、传文件。
 - 桌面有侧栏/顶栏入口，DSH Go 有原生记忆页。
 
-> 当前版本 `0.4.5`，MIT。DSH Go 原生记忆页的配套 PR：
+> 当前版本 `0.4.6`（安全与数据完整性加固版），MIT。DSH Go 原生记忆页的配套 PR：
 > [dsh-go #168](https://github.com/ccch1mneyyy/dsh-Go/pull/168)（Ready for review）。
 
 ---
@@ -48,7 +48,7 @@ DSH 默认每个会话都是新的。`dsh-mesh` 把“该记住的事”写成 M
 
 - 不是数据库/向量库，不藏二进制。
 - 不同步原始 zstd 会话（单写者，会冲突）。
-- 不做任意 Android 私有目录访问。
+- 不做任意文件外传：`mesh_send_file` 只允许配置目录内的文件（默认共享记忆目录 + `Downloads`），并拒绝密钥/凭据类文件。
 - 不替 DSH Remote 做账号或中继。
 
 ## 功能
@@ -86,7 +86,7 @@ DSH 插件宿主
   ├─ memory/{facts,decisions,projects,notes}/
   ├─ sessions/<device>/<sessionId>.md
   ├─ index/{devices.json,sessions.jsonl,files.jsonl}
-  └─ .mesh/skills.json
+  └─ .mesh/（本地碎片；skills 清单已移到 $DSH_HOME/dsh-mesh-skills.json，避免把本机路径同步出去）
 ```
 
 跨设备时：
@@ -183,6 +183,9 @@ mesh_status
         syncSkills: true
         autoRecall: true
         dashboardPort: 8765
+        # 可选：允许 mesh_send_file 上传的本机目录（留空 = 共享记忆目录 + ~/Downloads）
+        allowedUploadRoots:
+          - D:\dsh-mesh\artifacts
 ```
 
 | 字段 | 默认 | 说明 |
@@ -193,6 +196,12 @@ mesh_status
 | `syncSkills` | `false` | 启动时复制共享 skills |
 | `autoRecall` | `true` | 每轮自动检索并注入记忆 |
 | `dashboardPort` | `8765` | 独立只读页面端口，仅 127.0.0.1 |
+| `maxFileBytes` | `200000` | 单个记忆文件的读取上限 |
+| `maxRecallFiles` | `1000` | 召回候选文件上限，按修改时间倒序取 |
+| `maxRecallFileBytes` | `1000000` | 参与召回的单个文件大小上限 |
+| `recallMinScore` | `0` | 召回的最低 BM25 绝对分（0 = 只用相对门槛与词项特异性） |
+| `recallMaxChars` | `6000` | 每轮注入召回文本的字符预算 |
+| `allowedUploadRoots` | `[]` → 共享记忆目录 + `~/Downloads` | 允许 `mesh_send_file` 上传的本机目录 |
 
 多设备时每台设备用不同 `deviceName`，避免摘要目录混在一起。
 
@@ -359,9 +368,13 @@ http://127.0.0.1:8765/
 - 记忆是**明文 Markdown**；敏感内容请自行加密/脱敏。
 - 页面默认只绑定 `127.0.0.1`。
 - 远程内容、文件名、网页内容一律按不可信数据处理。
+- **读取边界**（0.4.6 起）：只读共享目录内的普通文件，拒绝符号链接/目录联接，`realpath` 必须仍在共享目录内，并有单文件大小上限。
+- **上传边界**（0.4.6 起）：`mesh_send_file` 只允许 `allowedUploadRoots` 内的文件，并永久拒绝 `.env`、`id_*`、`*.pem`、`*.key`、`*.jks`、`.ssh/` 等敏感路径。
+- **写入边界**（0.4.6 起）：`mesh_digest` 的 `sessionId` 走白名单；记忆写入用唯一临时文件 + rename，不会同秒覆盖。
 - 下载 ≤50 MiB；上传中继 ≤20 MiB、P2P ≤1 GiB；只限工作区。
 - Android `/sdcard` 工作区的 Remote 上传/下载可能失败，优先 `/root/workspace`。
 - `mesh_run` 目标端按自己的权限执行，不会提权；审批由目标端处理。
+- **未做**（计划在 0.5.x）：AGENTS/skills 应用的二次确认、Remote job 状态机、索引缓存。当前 `mesh_memory_sync` 仍会直接物化托管块（带备份 + 标记转义 + 备份轮转）。
 - Syncthing 的发现/中继服务器、DSH Remote 的账号/中继属于第三方边界，请按自己的隐私要求配置。
 
 ## 故障排查
@@ -375,6 +388,8 @@ http://127.0.0.1:8765/
 | Go 顶栏没有「记忆」 | 是否装了带原生页的测试 APK；host `ui.json` 是否有 `page:"memory"` action |
 | `mesh_run` 失败 | DSH Remote 是否登录；目标 Host 是否在线；工作区是否存在 |
 | `/sdcard` 传文件失败 | 改用 `/root/workspace`，或让目标端 Agent 操作 |
+| `mesh_send_file` 报“不在允许上传的目录” | 把目录加进 `allowedUploadRoots`，或先把文件复制到 `~/Downloads` |
+| 召回里出现“候选已截断” | 记忆文件超过 `maxRecallFiles`（默认 1000，按 mtime 倒序）；提高上限或归档旧条目 |
 
 更多见 [`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)。
 
@@ -392,9 +407,10 @@ Remove-Item <profile>\node_modules\dsh-mesh -Recurse -Force
 ## 开发与贡献
 
 ```powershell
-node --check index.js
-node --check src/store.js
+npm run check                        # node --check 全部源文件
+npm test                             # node:test（store / recall / policy）
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Profiles desktop
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Rollback   # 回到上一个备份
 ```
 
 - 架构：[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)

@@ -26,21 +26,22 @@ mesh_status
 ## 代码约定
 
 - 纯 ESM，Node 原生 `fs`，不引入不必要的依赖。
-- 所有写操作限制在 `memoryDir` 内；路径必须经过 `safeRel`。
+- 所有写操作限制在 `memoryDir` 内；路径必须经过 `safeRel`，来自模型参数的路径还要额外白名单（如 `sessionId`）。
 - 不把原始 DSH 会话加入同步目录。
 - 用户可见行为变化要更新 `README.md` / `docs/` / `CHANGELOG.md`。
 - 不在日志/错误里输出 token、私钥、完整记忆正文。
 
 ## 测试
 
-当前仓库没有完整的自动化测试套件；提交前至少：
+0.4.6 起有 `node:test` 套件（`test/`），提交前至少跑：
 
 ```powershell
-node --check index.js
-node --check src/store.js
-node --check src/recall.js
+npm run check     # node --check 全部源文件
+npm test          # store / recall / policy 的行为测试
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Profiles desktop
 ```
+
+新增安全相关改动时，请同时补一条能复现问题的用例；没有用例的“加固”不算完成。
 
 并在测试记忆目录验证：
 

@@ -4,40 +4,45 @@ import { parseFrontmatter } from './store.js'
 
 const K1 = 1.2
 const B = 0.75
-const MAX_FILES = 240
 const MAX_CHUNKS_PER_FILE = 12
-const MAX_CONTEXT_CHARS = 6000
+const MAX_QUERY_TERMS = 24
+const RELATIVE_FLOOR = 0.2
 
-function walk(root, rel = '') {
-  const out = []
-  const dir = path.join(root, rel)
-  let entries
-  try {
-    entries = fsSync.readdirSync(dir, { withFileTypes: true })
-  } catch {
-    return out
-  }
-  for (const entry of entries) {
-    if (entry.name.startsWith('.') || entry.name.includes('.sync-conflict-')) continue
-    const child = rel ? `${rel}/${entry.name}` : entry.name
-    if (entry.isDirectory()) out.push(...walk(root, child))
-    else if (entry.isFile() && /\.md$/i.test(entry.name)) out.push(child)
-  }
-  return out
-}
-
-// 同步目录树只用于扫描文件列表；真正的读文件在下面异步做。
-import fsSync from 'node:fs'
+// 停用词（P1-6）：英文虚词与中文高频 bigram，避免“is/the/这个”把无关记忆带进来。
+const EN_STOPWORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'been', 'but', 'by', 'can', 'could', 'did', 'do', 'does',
+  'for', 'from', 'had', 'has', 'have', 'he', 'her', 'his', 'how', 'i', 'if', 'in', 'into', 'is', 'it',
+  'its', 'just', 'me', 'might', 'must', 'my', 'no', 'not', 'of', 'on', 'or', 'our', 'should', 'so',
+  'than', 'that', 'the', 'their', 'them', 'then', 'there', 'these', 'they', 'this', 'to', 'was', 'we',
+  'were', 'what', 'when', 'where', 'which', 'who', 'why', 'will', 'with', 'would', 'you', 'your',
+  'about', 'also', 'only', 'over', 'such', 'via', 'vs',
+])
+const ZH_STOPWORDS = new Set([
+  '的', '是', '在', '了', '和', '就', '不', '人', '都', '一', '一个', '上', '也', '很', '到', '说', '要',
+  '去', '你', '我', '他', '她', '它', '们', '这', '那', '这个', '那个', '什么', '怎么', '如何', '为什么',
+  '可以', '没有', '我们', '你们', '他们', '如果', '因为', '所以', '但是', '然后', '现在', '已经', '还是',
+  '就是', '时候', '问题', '一下', '一些', '这样', '那样', '这里', '那里', '哪里', '有', '与', '及', '或',
+  '把', '被', '让', '给', '对', '从', '向', '于', '为', '着', '过', '地', '得',
+])
 
 function tokenize(value) {
   const text = String(value || '').toLowerCase()
   const out = []
   for (const part of text.match(/[a-z0-9_]+|[\u4e00-\u9fff]+/g) || []) {
     if (/^[a-z0-9_]+$/.test(part)) {
+      if (part.length < 2) continue
+      if (EN_STOPWORDS.has(part)) continue
       out.push(part)
-    } else {
-      if (part.length === 1) out.push(part)
-      for (let i = 0; i + 1 < part.length; i += 1) out.push(part.slice(i, i + 2))
+      continue
+    }
+    if (part.length === 1) {
+      if (!ZH_STOPWORDS.has(part)) out.push(part)
+      continue
+    }
+    for (let i = 0; i + 1 < part.length; i += 1) {
+      const bigram = part.slice(i, i + 2)
+      if (ZH_STOPWORDS.has(bigram)) continue
+      out.push(bigram)
     }
   }
   return out
@@ -55,47 +60,90 @@ function chunkBody(body) {
       chunks.push(current.join('\n\n'))
       current = []
       length = 0
+      if (chunks.length >= MAX_CHUNKS_PER_FILE) return chunks
     }
     current.push(block.trim())
     length += block.length
   }
-  if (current.length) chunks.push(current.join('\n\n'))
-  return chunks.slice(0, MAX_CHUNKS_PER_FILE)
+  if (current.length && chunks.length < MAX_CHUNKS_PER_FILE) chunks.push(current.join('\n\n'))
+  return chunks
 }
 
-function nowMs() {
-  return Date.now()
+function parseDate(value) {
+  if (value === undefined || value === null || value === '') return null
+  const t = Date.parse(String(value))
+  return Number.isFinite(t) ? t : NaN
 }
 
-function isValid(attrs, at = nowMs()) {
-  if (attrs.invalidAt) {
-    const t = Date.parse(String(attrs.invalidAt))
-    if (Number.isFinite(t) && t <= at) return false
-  }
-  if (attrs.supersededBy && attrs.invalidAt === undefined && attrs.validAt === undefined) {
-    // 明确写了 supersededBy 但没写时间，按“已被取代”处理；旧文件不会带这个字段。
-    return false
-  }
+/**
+ * 有效性（P1-8）：
+ * - supersededBy 存在即不注入（不论是否同时写了时间字段）；
+ * - validAt 在未来不注入；
+ * - invalidAt 已过不注入；
+ * - 时间无法解析时保留条目并告警，不静默丢数据。
+ */
+function isValid(attrs, at = Date.now()) {
+  if (attrs.supersededBy) return false
+  const invalidAt = parseDate(attrs.invalidAt)
+  if (Number.isNaN(invalidAt)) console.warn('[dsh-mesh] invalidAt 无法解析，已忽略该限制:', attrs.invalidAt)
+  else if (invalidAt !== null && invalidAt <= at) return false
+  const validAt = parseDate(attrs.validAt)
+  if (Number.isNaN(validAt)) console.warn('[dsh-mesh] validAt 无法解析，已忽略该限制:', attrs.validAt)
+  else if (validAt !== null && validAt > at) return false
   return true
+}
+
+async function walkFiles(root, rel) {
+  const out = []
+  const dir = path.join(root, rel)
+  let entries
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true })
+  } catch {
+    return out
+  }
+  for (const entry of entries) {
+    if (entry.name.startsWith('.') || entry.name.includes('.sync-conflict-')) continue
+    const child = `${rel}/${entry.name}`
+    if (entry.isDirectory()) {
+      out.push(...(await walkFiles(root, child)))
+    } else if (entry.isFile() && /\.md$/i.test(entry.name)) {
+      try {
+        const stat = await fs.stat(path.join(root, child))
+        out.push({ rel: child, mtimeMs: stat.mtimeMs, size: stat.size })
+      } catch {}
+    }
+  }
+  return out
 }
 
 async function loadDocs(settings) {
   const root = settings.memoryDir
-  const rels = [...walk(root, 'memory'), ...walk(root, 'sessions')]
+  const rows = [...(await walkFiles(root, 'memory')), ...(await walkFiles(root, 'sessions'))]
+  // 新记忆优先：按 mtime 倒序取候选，而不是依赖文件系统顺序（P1-5）。
+  rows.sort((a, b) => b.mtimeMs - a.mtimeMs || a.rel.localeCompare(b.rel))
+  const cap = Math.max(1, Number(settings.maxRecallFiles) || 1000)
+  const limit = Number(settings.maxRecallFileBytes) || 1_000_000
+  const selected = rows.slice(0, cap)
   const docs = []
-  for (const rel of rels.slice(0, MAX_FILES)) {
+  let skippedLarge = 0
+  for (const row of selected) {
+    if (row.size > limit) {
+      skippedLarge += 1
+      continue
+    }
     try {
-      const text = await fs.readFile(path.join(root, rel), 'utf8')
+      const text = await fs.readFile(path.join(root, row.rel), 'utf8')
       const parsed = parseFrontmatter(text)
       if (!isValid(parsed.attrs)) continue
-      const title = String(parsed.attrs.title || path.basename(rel, '.md'))
+      const title = String(parsed.attrs.title || path.basename(row.rel, '.md'))
       const description = String(parsed.attrs.description || '')
       const tags = Array.isArray(parsed.attrs.tags) ? parsed.attrs.tags.join(' ') : ''
       const aliases = Array.isArray(parsed.attrs.aliases) ? parsed.attrs.aliases.join(' ') : ''
       const chunks = chunkBody(parsed.body)
       if (!chunks.length) continue
       docs.push({
-        path: rel,
+        path: row.rel,
         title,
         description,
         tags,
@@ -107,11 +155,11 @@ async function loadDocs(settings) {
       })
     } catch {}
   }
-  return docs
+  return { docs, total: rows.length, truncated: rows.length > selected.length, skippedLarge }
 }
 
 function bm25(docs, query) {
-  const qTerms = [...new Set(tokenize(query))]
+  const qTerms = [...new Set(tokenize(query))].slice(0, MAX_QUERY_TERMS)
   if (!qTerms.length) return []
   const chunks = []
   for (const doc of docs) {
@@ -128,20 +176,26 @@ function bm25(docs, query) {
     for (const term of new Set(c.tokens)) df.set(term, (df.get(term) || 0) + 1)
   }
   const scored = []
+  // 词项特异性闸门（P1-6）：只被“几乎每条都出现”的词命中的条目不算相关。
+  // 用绝对门槛做不到这一点——BM25 的 idf 随语料规模变化，小语料会被一刀切误杀。
+  const specificDf = Math.max(2, Math.ceil(chunks.length * 0.6))
   for (const c of chunks) {
     const tf = new Map()
     for (const term of c.tokens) tf.set(term, (tf.get(term) || 0) + 1)
     let score = 0
+    let specific = false
     for (const term of qTerms) {
       const freq = tf.get(term) || 0
       if (!freq) continue
-      const idf = Math.log(1 + (chunks.length - (df.get(term) || 0) + 0.5) / ((df.get(term) || 0) + 0.5))
+      const dfi = df.get(term) || 0
+      if (dfi <= specificDf) specific = true
+      const idf = Math.log(1 + (chunks.length - dfi + 0.5) / (dfi + 0.5))
       score += idf * ((freq * (K1 + 1)) / (freq + K1 * (1 - B + (B * c.len) / avgLen)))
     }
     if (score > 0) {
       const meta = `${c.doc.title} ${c.doc.description} ${c.doc.tags} ${c.doc.aliases}`.toLowerCase()
       const bonus = qTerms.reduce((n, term) => n + (meta.includes(term) ? 0.8 : 0), 0)
-      scored.push({ ...c, score: score + bonus })
+      scored.push({ ...c, score: score + bonus, specific })
     }
   }
   scored.sort((a, b) => b.score - a.score)
@@ -154,8 +208,11 @@ function excerpt(text, max = 900) {
 }
 
 export async function buildRecall(settings, query) {
-  const docs = await loadDocs(settings)
-  if (!docs.length) return { text: '', files: [], baseline: 0, hits: 0 }
+  const loaded = await loadDocs(settings)
+  const docs = loaded.docs
+  if (!docs.length) {
+    return { text: '', files: [], baseline: 0, hits: 0, truncated: loaded.truncated, candidates: loaded.total }
+  }
 
   const baseline = docs
     .filter((d) => d.baseline)
@@ -165,10 +222,16 @@ export async function buildRecall(settings, query) {
   const best = new Map()
   for (const hit of ranked) {
     const prev = best.get(hit.doc.path)
-    if (!prev || hit.score > prev.score) best.set(hit.doc.path, { doc: hit.doc, chunk: hit, score: hit.score })
+    if (!prev || hit.score > prev.score) best.set(hit.doc.path, { doc: hit.doc, chunk: hit, score: hit.score, specific: hit.specific })
   }
-  const hits = [...best.values()].sort((a, b) => b.score - a.score).slice(0, 4)
-  if (!baseline.length && !hits.length) return { text: '', files: [], baseline: 0, hits: 0 }
+  const ordered = [...best.values()].sort((a, b) => b.score - a.score)
+  const top = ordered[0]?.score || 0
+  // 绝对门槛（默认 0，可配）+ 相对门槛：低于最高分 20% 的命中不注入（P1-6）。
+  const threshold = Math.max(Number(settings.recallMinScore) || 0, top * RELATIVE_FLOOR)
+  const hits = ordered.filter((item) => item.specific && item.score >= threshold).slice(0, 4)
+  if (!baseline.length && !hits.length) {
+    return { text: '', files: [], baseline: 0, hits: 0, truncated: loaded.truncated, candidates: loaded.total }
+  }
 
   const lines = [
     '<dsh-mesh-memory>',
@@ -180,10 +243,24 @@ export async function buildRecall(settings, query) {
   for (const { doc, chunk } of hits) {
     lines.push(`### ${doc.path}`, `描述：${doc.description || doc.title}`, excerpt(chunk.text, 900))
   }
+  if (loaded.truncated) {
+    lines.push(
+      `（候选已截断：共 ${loaded.total} 个记忆文件，只扫描了最近 ${settings.maxRecallFiles || 1000} 个；` +
+        '更早的内容请用 mesh_memory_search 检索。）',
+    )
+  }
   lines.push('</dsh-mesh-memory>')
+  const maxChars = Math.max(1000, Number(settings.recallMaxChars) || 6000)
   let text = lines.join('\n')
-  if (text.length > MAX_CONTEXT_CHARS) text = `${text.slice(0, MAX_CONTEXT_CHARS)}\n…（已截断）`
-  return { text, files: [...baseline.map((d) => d.path), ...hits.map((h) => h.doc.path)], baseline: baseline.length, hits: hits.length }
+  if (text.length > maxChars) text = `${text.slice(0, maxChars)}\n…（已截断）`
+  return {
+    text,
+    files: [...baseline.map((d) => d.path), ...hits.map((h) => h.doc.path)],
+    baseline: baseline.length,
+    hits: hits.length,
+    truncated: loaded.truncated,
+    candidates: loaded.total,
+  }
 }
 
 function contentText(content) {
@@ -215,6 +292,7 @@ export function registerRecall(ctx, settings) {
       const signature = `${query.slice(0, 120)}\0${built.files.join('|')}`
       if (seen.get(session.id) === signature) return assembled
       seen.set(session.id, signature)
+      if (seen.size > 200) seen.delete(seen.keys().next().value)
       return {
         ...assembled,
         contexts: [
@@ -229,3 +307,5 @@ export function registerRecall(ctx, settings) {
   const off = ctx.on('system-prompt/assemble', handler)
   return typeof off === 'function' ? off : () => {}
 }
+
+

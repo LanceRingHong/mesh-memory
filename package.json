@@ -1,6 +1,6 @@
 {
   "name": "dsh-mesh",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "private": true,
   "description": "DSH Mesh: shared memory (AGENTS/skills/summaries) and cross-device DSH delegation over DSH Remote.",
   "keywords": [
@@ -17,6 +17,23 @@
   },
   "type": "module",
   "main": "index.js",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check index.js && node --check client.js && node --check src/config.js && node --check src/store.js && node --check src/agents.js && node --check src/remote.js && node --check src/tools.js && node --check src/dashboard.js && node --check src/native.js && node --check src/recall.js && node --check src/policy.js"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "install.ps1",
+    "src/",
+    "docs/",
+    "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "LICENSE"
+  ],
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",

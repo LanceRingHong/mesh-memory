@@ -1,7 +1,18 @@
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { ensureLayout, writeNote, searchMemory, readMemory, appendJsonl, counts, publishNativeManifest } from './store.js'
+import {
+  ensureLayout,
+  writeNote,
+  searchMemory,
+  readMemory,
+  appendJsonl,
+  counts,
+  publishNativeManifest,
+  sessionsFile,
+  writeFileAtomic,
+} from './store.js'
 import { materializeAgents, syncSkills } from './agents.js'
+import { resolveUploadPath } from './policy.js'
 import { asObject, listHosts, listWorkspaces, runOnHost, readSession, interruptSession, downloadFile, uploadFile } from './remote.js'
 
 /**
@@ -29,9 +40,22 @@ async function loadDefineTool() {
 
 const defineTool = await loadDefineTool()
 
-const str = (description, extra = {}) => ({ type: 'string', description, ...extra })
-const num = (description, _extra = {}) => ({ type: 'number', description })
-const bool = (description) => ({ type: 'boolean', description })
+/**
+ * DSH 的参数 DSL 只支持 type/enum/const/required/default/title/examples/description，
+ * 不支持 minimum/maximum —— 数值范围必须在 execute 里钳制（P2-10）。
+ */
+const SUPPORTED_KEYS = new Set(['enum', 'required', 'default', 'title', 'examples'])
+function withExtras(base, extra) {
+  const out = { ...base }
+  for (const [key, value] of Object.entries(extra || {})) {
+    if (SUPPORTED_KEYS.has(key)) out[key] = value
+  }
+  return out
+}
+
+const str = (description, extra = {}) => withExtras({ type: 'string', description }, extra)
+const num = (description, extra = {}) => withExtras({ type: 'number', description }, extra)
+const bool = (description, extra = {}) => withExtras({ type: 'boolean', description }, extra)
 
 /** 所有 mesh 工具都返回文本（JSON 或 Markdown）。 */
 const TEXT_OUTPUT = {
@@ -45,6 +69,16 @@ function json(value) {
   } catch {
     return String(value)
   }
+}
+
+function relOf(settings, file) {
+  return path.relative(settings.memoryDir, file).replace(/\\/g, '/')
+}
+
+function clampInt(value, min, max, fallback) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, Math.trunc(n)))
 }
 
 export function registerTools(ctx, settings) {
@@ -69,6 +103,12 @@ export function registerTools(ctx, settings) {
         syncSkills: settings.syncSkills,
         dashboardPort: settings.dashboardPort,
         dashboardUrl: `http://127.0.0.1:${settings.dashboardPort}/`,
+        recall: {
+          maxFiles: settings.maxRecallFiles,
+          maxFileBytes: settings.maxRecallFileBytes,
+          minScore: settings.recallMinScore,
+        },
+        allowedUploadRoots: settings.allowedUploadRoots,
       })
     },
   })
@@ -81,7 +121,7 @@ export function registerTools(ctx, settings) {
       memoryType: str('语义类型', { enum: ['user', 'feedback', 'project', 'reference'] }),
       title: str('标题'),
       description: str('一句话描述（检索靠它，务必写准）'),
-      content: str('正文（Markdown）'),
+      content: str('正文（Markdown）', { required: true }),
       tags: { type: 'array', items: { type: 'string' }, description: '标签（可选）' },
       aliases: { type: 'array', items: { type: 'string' }, description: '别名/换一种说法（可选）' },
       baseline: { type: 'boolean', description: '是否每场会话开场注入（默认 false）' },
@@ -107,7 +147,8 @@ export function registerTools(ctx, settings) {
         supersededBy: args.supersededBy,
         device: settings.deviceName,
       })
-      return json({ ok: true, path: path.relative(settings.memoryDir, file).replace(/\\/g, '/'), file })
+      // 只返回相对路径：不把宿主绝对路径写进模型上下文（P0-1/P3）。
+      return json({ ok: true, path: relOf(settings, file) })
     },
   })
 
@@ -115,12 +156,13 @@ export function registerTools(ctx, settings) {
     name: 'mesh_memory_search',
     description: '在共享的 AGENTS.shared.md、memory/ 和 sessions/ 摘要里做关键词检索，返回命中片段与相对路径。',
     parameters: {
-      query: str('关键词，空格分隔多个词'),
-      limit: num('最多返回条数，默认 20', { minimum: 1, maximum: 100 }),
+      query: str('关键词，空格分隔多个词', { required: true }),
+      limit: num('最多返回条数，默认 20（1-100）'),
     },
     async execute(args) {
       await ensureLayout(settings)
-      const results = await searchMemory(settings, args.query, args.limit)
+      const limit = clampInt(args.limit, 1, 100, settings.maxSearchResults)
+      const results = await searchMemory(settings, args.query, limit)
       return json({ ok: true, count: results.length, results })
     },
   })
@@ -128,7 +170,7 @@ export function registerTools(ctx, settings) {
   add({
     name: 'mesh_memory_read',
     description: '读取共享记忆目录内的一个相对路径（Markdown/文本），用于查看检索命中的原文。',
-    parameters: { path: str('相对 memoryDir 的路径，如 memory/facts/x.md') },
+    parameters: { path: str('相对 memoryDir 的路径，如 memory/facts/x.md', { required: true }) },
     async execute(args) {
       await ensureLayout(settings)
       const text = await readMemory(settings, args.path)
@@ -155,23 +197,21 @@ export function registerTools(ctx, settings) {
     name: 'mesh_digest',
     description: '把一段会话摘要写入共享 sessions/<device>/ 并登记索引。摘要由你（Agent）根据会话内容生成，不读取原始 zstd 日志。',
     parameters: {
-      sessionId: str('本机会话 id'),
+      sessionId: str('本机会话 id（只允许字母/数字/点/下划线/短横线）', { required: true }),
       title: str('标题'),
-      summary: str('摘要正文（用户诉求、结论、涉及文件、待办）'),
+      summary: str('摘要正文（用户诉求、结论、涉及文件、待办）', { required: true }),
       tags: { type: 'array', items: { type: 'string' }, description: '标签（可选）' },
     },
     async execute(args) {
       await ensureLayout(settings)
       const sessionId = String(args.sessionId || '').trim()
-      if (!sessionId) throw new Error('sessionId 不能为空')
+      // 白名单 + safeRel：sessionId 来自模型参数，绝不能直接拼路径（P0-1）。
+      const file = sessionsFile(settings, sessionId)
       const sessions = ctx.get('sessions')
       let header = null
       try {
         header = sessions?.get?.(sessionId)?.header ?? null
       } catch {}
-      const dir = path.join(settings.memoryDir, 'sessions', settings.deviceSlug)
-      const { mkdir, writeFile } = await import('node:fs/promises')
-      await mkdir(dir, { recursive: true })
       const title = String(args.title || header?.title || '').trim() || sessionId
       const body = [
         '---',
@@ -186,8 +226,7 @@ export function registerTools(ctx, settings) {
         String(args.summary || '').trim() || '（未提供摘要）',
         '',
       ].join('\n')
-      const file = path.join(dir, `${sessionId}.md`)
-      await writeFile(file, body, 'utf8')
+      await writeFileAtomic(file, body)
       await appendJsonl(settings, 'sessions.jsonl', {
         device: settings.deviceName,
         deviceSlug: settings.deviceSlug,
@@ -195,11 +234,11 @@ export function registerTools(ctx, settings) {
         title,
         cwd: header?.cwd || '',
         updatedAt: new Date().toISOString(),
-        path: path.relative(settings.memoryDir, file).replace(/\\/g, '/'),
+        path: relOf(settings, file),
         tags: args.tags || [],
       })
       await publishNativeManifest(settings).catch(() => {})
-      return json({ ok: true, path: path.relative(settings.memoryDir, file).replace(/\\/g, '/'), file })
+      return json({ ok: true, path: relOf(settings, file) })
     },
   })
 
@@ -224,7 +263,7 @@ export function registerTools(ctx, settings) {
   add({
     name: 'mesh_workspaces',
     description: '列出某台 Remote Host 的工作区（后台 harness），用于选择委托目标。',
-    parameters: { hostId: str('remote_list_hosts / mesh_peers 返回的 hostId') },
+    parameters: { hostId: str('remote_list_hosts / mesh_peers 返回的 hostId', { required: true }) },
     async execute(args, exec) {
       await ensureLayout(settings)
       const raw = await listWorkspaces(ctx, exec, args.hostId)
@@ -237,12 +276,12 @@ export function registerTools(ctx, settings) {
     description:
       '在一台 Remote Host 的 harness 工作区里新建会话、发送任务、等待并读回结果。用于把任务委托给其他设备的 DSH；目标端按自己的权限执行。',
     parameters: {
-      hostId: str('目标 Host id'),
-      task: str('要委托的任务文本'),
+      hostId: str('目标 Host id', { required: true }),
+      task: str('要委托的任务文本', { required: true }),
       workspaceId: str('目标工作区 id（可选；不填则选第一个 harness 工作区）'),
       workspacePath: str('按工作区路径/标题选择（可选，如 /sdcard）'),
-      waitMs: num('等待结果的毫秒数，默认 30000', { minimum: 1000, maximum: 60000 }),
-      readMessages: num('读回的消息条数，默认 20', { minimum: 1, maximum: 50 }),
+      waitMs: num('等待结果的毫秒数，默认 30000（1000-60000）'),
+      readMessages: num('读回的消息条数，默认 20（1-50）'),
     },
     async execute(args, exec) {
       await ensureLayout(settings)
@@ -251,8 +290,8 @@ export function registerTools(ctx, settings) {
         workspaceId: args.workspaceId,
         workspacePath: args.workspacePath,
         task: args.task,
-        waitMs: args.waitMs,
-        readMessages: args.readMessages,
+        waitMs: clampInt(args.waitMs, 1000, 60000, 30000),
+        readMessages: clampInt(args.readMessages, 1, 50, 20),
       })
       const hint =
         result.status === 'needs_user_input'
@@ -266,10 +305,10 @@ export function registerTools(ctx, settings) {
     name: 'mesh_read',
     description: '读取某台 Remote Host 上一个 harness 会话的有界历史（分页由 Remote 处理）。',
     parameters: {
-      hostId: str('目标 Host id'),
-      workspaceId: str('工作区 id'),
-      sessionId: str('会话 id'),
-      maxMessages: num('最多消息数，默认 20', { minimum: 1, maximum: 50 }),
+      hostId: str('目标 Host id', { required: true }),
+      workspaceId: str('工作区 id', { required: true }),
+      sessionId: str('会话 id', { required: true }),
+      maxMessages: num('最多消息数，默认 20（1-50）'),
     },
     async execute(args, exec) {
       await ensureLayout(settings)
@@ -277,7 +316,7 @@ export function registerTools(ctx, settings) {
         hostId: args.hostId,
         workspaceId: args.workspaceId,
         sessionId: args.sessionId,
-        maxMessages: args.maxMessages,
+        maxMessages: clampInt(args.maxMessages, 1, 50, 20),
       })
       return json({ ok: true, ...result })
     },
@@ -287,9 +326,9 @@ export function registerTools(ctx, settings) {
     name: 'mesh_interrupt',
     description: '请求中断某台 Remote Host 上一个会话的当前执行（不撤销已做的修改，不删除排队的消息）。',
     parameters: {
-      hostId: str('目标 Host id'),
-      workspaceId: str('工作区 id'),
-      sessionId: str('会话 id'),
+      hostId: str('目标 Host id', { required: true }),
+      workspaceId: str('工作区 id', { required: true }),
+      sessionId: str('会话 id', { required: true }),
     },
     async execute(args, exec) {
       const result = await interruptSession(ctx, exec, {
@@ -305,10 +344,10 @@ export function registerTools(ctx, settings) {
     name: 'mesh_fetch_file',
     description: '从某台 Remote Host 的会话工作区下载一个文件到本机 Downloads（受 Remote 50 MiB 限制）。',
     parameters: {
-      hostId: str('目标 Host id'),
-      workspaceId: str('工作区 id'),
-      sessionId: str('会话 id'),
-      path: str('工作区相对路径'),
+      hostId: str('目标 Host id', { required: true }),
+      workspaceId: str('工作区 id', { required: true }),
+      sessionId: str('会话 id', { required: true }),
+      path: str('工作区相对路径', { required: true }),
     },
     async execute(args, exec) {
       try {
@@ -331,21 +370,24 @@ export function registerTools(ctx, settings) {
 
   add({
     name: 'mesh_send_file',
-    description: '把一个本机文件上传到某台 Remote Host 的会话工作区根目录（中继 ≤20 MiB，P2P ≤1 GiB，不覆盖同名文件）。',
+    description:
+      '把一个本机文件上传到某台 Remote Host 的会话工作区根目录（中继 ≤20 MiB，P2P ≤1 GiB，不覆盖同名文件）。只允许上传配置目录内的文件。',
     parameters: {
-      hostId: str('目标 Host id'),
-      workspaceId: str('工作区 id'),
-      sessionId: str('会话 id'),
-      localPath: str('本机绝对路径'),
+      hostId: str('目标 Host id', { required: true }),
+      workspaceId: str('工作区 id', { required: true }),
+      sessionId: str('会话 id', { required: true }),
+      localPath: str('本机绝对路径（必须在 allowedUploadRoots 内）', { required: true }),
       name: str('目标文件名（可选）'),
     },
     async execute(args, exec) {
       try {
+        // 白名单 + 敏感文件拒绝 + realpath 校验，再交给 Remote（P0-3）。
+        const resolved = await resolveUploadPath(settings, args.localPath)
         const result = await uploadFile(ctx, exec, {
           hostId: args.hostId,
           workspaceId: args.workspaceId,
           sessionId: args.sessionId,
-          localPath: args.localPath,
+          localPath: resolved.path,
           name: args.name,
         })
         if (result.status === 'unknown') {
@@ -355,12 +397,12 @@ export function registerTools(ctx, settings) {
             hint: '上传回执为 unknown，文件可能未落盘。Android 上 /sdcard 工作区常见；改用 /root/workspace 重试。',
           })
         }
-        return json({ ok: true, ...result })
+        return json({ ok: true, local: { path: resolved.path, size: resolved.size }, ...result })
       } catch (error) {
         return json({
           ok: false,
           error: String(error?.message || error),
-          hint: 'Android 上 /sdcard 工作区可能不支持 Remote 上传/下载；改用 /root/workspace，或让目标端 Agent 直接操作 /sdcard。',
+          hint: '上传只允许配置的目录（默认：共享记忆目录与 Downloads）。若确需其他目录，请让用户在插件配置 allowedUploadRoots 中显式添加；Android 上 /sdcard 工作区可能不支持上传，改用 /root/workspace。',
         })
       }
     },

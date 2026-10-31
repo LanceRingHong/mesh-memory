@@ -47,6 +47,19 @@ function recentSync(root, rel, limit = 12) {
   return rows.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, limit)
 }
 
+/** 同步版安全读取（P0-2）：拒符号链接、realpath 必须仍在根目录内。 */
+function readInsideSync(root, rel, maxBytes = 8000) {
+  const realRoot = fs.realpathSync(root)
+  const target = path.resolve(realRoot, String(rel || ''))
+  if (target !== realRoot && !target.startsWith(realRoot + path.sep)) throw new Error('path escapes memoryDir')
+  const link = fs.lstatSync(target)
+  if (link.isSymbolicLink()) throw new Error('refuse symlink')
+  if (!link.isFile()) throw new Error('not a file')
+  const real = fs.realpathSync(target)
+  if (real !== realRoot && !real.startsWith(realRoot + path.sep)) throw new Error('path escapes memoryDir')
+  return fs.readFileSync(real, 'utf8').slice(0, maxBytes)
+}
+
 function devicesSync(root) {
   try {
     const data = JSON.parse(fs.readFileSync(path.join(root, 'index', 'devices.json'), 'utf8'))
@@ -151,18 +164,11 @@ export function registerNative(ctx, settings) {
         refresh: () => ({ refresh: true }),
         open: (scope, event) => {
           const rel = String(event?.value?.path || '')
-          const root = path.resolve(settings.memoryDir)
-          const file = path.resolve(root, rel)
-          if (file !== root && !file.startsWith(root + path.sep)) {
-            return { toast: '路径不合法' }
-          }
           try {
-            const stat = fs.statSync(file)
-            if (!stat.isFile()) return { toast: '不是文件' }
-            const text = fs.readFileSync(file, 'utf8').slice(0, 8000)
+            const text = readInsideSync(settings.memoryDir, rel)
             return { copy: text, toast: '已复制到剪贴板' }
           } catch {
-            return { toast: '读取失败' }
+            return { toast: '读取失败（只允许共享目录内的普通文件）' }
           }
         },
       },
