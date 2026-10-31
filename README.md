@@ -8,7 +8,7 @@
 - 桌面有侧栏/顶栏入口，DSH Go 有原生记忆页。
 
 > 当前版本：`0.4.5`（MIT）。DSH 原生记忆页的 Go 端配套 PR 见
-> [dsh-go #168](https://github.com/ccch1mneyyy/dsh-Go/pull/168)（Draft）。
+> [dsh-go #168](https://github.com/ccch1mneyyy/dsh-Go/pull/168)（Ready for review）。
 
 ---
 
