@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.8.0 — 2026-11-01
+
+图形化记忆中心（桌面端）。
+
+### 界面（client.js）
+
+- 「记忆」改为三段式：**待确认 / 记忆 / 备份**。
+- 待确认：列表 + 摘要预览；可「接受」（选事实/笔记/决策/项目）、「忽略」、「立即整理」。
+- 记忆：搜索、树、Markdown 预览/源码切换；可新建、编辑（正文）、软删除。
+- 备份：立即快照、历史列表、恢复（二次确认，先自动快照当前状态）。
+- 顶部只保留设备与计数摘要，操作按钮就近放在当前内容区。
+
+### 写接口（dashboard.js）
+
+- 新增 POST：`/api/inbox/{accept,reject,flush}`、`/api/memory/{write,update,delete}`、`/api/backup/{snapshot,restore}`；新增 GET `/api/backup`。
+- 校验：回环地址 +（独立端口）token + 自定义头 `x-dsh-mesh-action: 1` + 同源 `Origin`；缺头一律 403。
+- 写操作都会触发 debounce git 快照。
+
+### 验证
+
+- 70 例测试（67 通过 / 3 跳过）。
+- 接口实测：accept 生成 `memory/notes/...` 且收件箱清零；delete 进 `.trash/`；snapshot 生成 commit；无自定义头的 POST 返回 403；GET `/api/backup` 正常。
+
 ## 0.7.0 — 2026-11-01
 
 无感记忆 P1：自动记录 + 本机收件箱 + git 快照（零模型调用、默认开启）。

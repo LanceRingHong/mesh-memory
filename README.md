@@ -2,7 +2,7 @@
 
 > 跨设备共享记忆 + DSH 委托，给 DeepSeek Harness 装上“不会失忆的第二大脑”。
 
-![version](https://img.shields.io/badge/version-0.7.0-blue)
+![version](https://img.shields.io/badge/version-0.8.0-blue)
 ![license](https://img.shields.io/github/license/LanceRingHong/dsh-mesh)
 ![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.x-8a2be2)
 ![Node](https://img.shields.io/badge/Node-%E2%89%A518-3c873a)
@@ -12,7 +12,7 @@
 - 通过 **DSH Remote** 委托另一台设备建会话、执行任务、读结果、传文件。
 - 桌面有侧栏/顶栏入口，DSH Go 有原生记忆页。
 
-> 当前版本 `0.7.0`（无感记忆 P1：自动记录 + 收件箱 + git 快照），MIT。DSH Go 原生记忆页的配套 PR：
+> 当前版本 `0.8.0`（图形化记忆中心：待确认 / 记忆 / 备份），MIT。DSH Go 原生记忆页的配套 PR：
 > [dsh-go #168](https://github.com/ccch1mneyyy/dsh-Go/pull/168)（Ready for review）。
 
 ---
@@ -63,7 +63,7 @@ DSH 默认每个会话都是新的。`dsh-mesh` 把“该记住的事”写成 M
 | 自动备份 | 共享目录快照到本机 git（`$DSH_HOME/dsh-mesh-backups.git`，不进同步目录） |
 | 跨设备委托 | `mesh_run` / `mesh_wait` / `mesh_send` / `mesh_read` / `mesh_interrupt` / `mesh_peers` / `mesh_workspaces` |
 | 文件传输 | `mesh_send_file` / `mesh_fetch_file`（受 Remote 工作区与大小限制） |
-| 桌面 UI | 侧栏底部、对话顶部、对话「记忆」标签；完整树 + Markdown 预览 |
+| 桌面 UI | 三段式：待确认（接受/忽略）、记忆（新建/编辑/删除）、备份（快照/恢复）；侧栏底部、对话顶部、对话「记忆」标签三个入口 |
 | Go UI | 原生记忆页（companion PR）；`dshGo` 面板；`conversation.view` page island |
 | 浏览器 | `http://127.0.0.1:8765/` 只读页（仅回环） |
 
@@ -334,9 +334,11 @@ GET /dsh-mesh/api/conflicts
 
 `client.js` 注册：
 
-- `conversation.view`「记忆」标签：完整树 + Markdown 预览/源码
+- `conversation.view`「记忆」标签：三段式界面（待确认 / 记忆 / 备份）
 - `sidebar.footer.action`：左侧栏底部「记忆」
 - `conversation.session.header.utilities`：对话顶部「记忆」
+
+界面操作：待确认里可直接「接受 / 忽略 / 立即整理」；记忆里可「新建 / 编辑 / 删除」；备份里可「立即快照 / 恢复」。
 
 ### DSH Go
 

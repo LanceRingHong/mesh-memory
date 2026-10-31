@@ -1,4 +1,5 @@
 import http from 'node:http'
+import path from 'node:path'
 import {
   ensureLayout,
   counts,
@@ -8,8 +9,13 @@ import {
   treeMemory,
   listConflicts,
   updateDevices,
+  writeNote,
+  updateNote,
+  trashNote,
 } from './store.js'
-import { listInbox, readInbox } from './inbox.js'
+import { listInbox, readInbox, acceptInbox, rejectInbox } from './inbox.js'
+import { flushAllSessions } from './capture.js'
+import { snapshot, listSnapshots, restoreSnapshot, scheduleSnapshot } from './backup.js'
 
 const HTML = `<!doctype html>
 <html lang="zh-CN">
@@ -165,6 +171,108 @@ function tokenOk(req, url, settings) {
   return String(given || '') === expected
 }
 
+function readJsonBody(req, limit = 1_000_000) {
+  return new Promise((resolve, reject) => {
+    let size = 0
+    const chunks = []
+    req.on('data', (chunk) => {
+      size += chunk.length
+      if (size > limit) {
+        reject(new Error('body too large'))
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      try {
+        const text = Buffer.concat(chunks).toString('utf8').trim()
+        resolve(text ? JSON.parse(text) : {})
+      } catch {
+        reject(new Error('invalid JSON body'))
+      }
+    })
+    req.on('error', reject)
+  })
+}
+
+/** 写操作必须带自定义头且同源：跨站表单/脚本无法伪造。 */
+function mutationAllowed(req) {
+  if (String(req.headers['x-dsh-mesh-action'] || '') !== '1') return false
+  const origin = req.headers.origin
+  if (!origin) return true
+  try {
+    return new URL(origin).host === req.headers.host
+  } catch {
+    return false
+  }
+}
+
+async function handleMutation(pathname, body, settings) {
+  await ensureLayout(settings)
+  switch (pathname) {
+    case '/dsh-mesh/api/inbox/flush': {
+      const flushed = await flushAllSessions(settings, 'manual')
+      return { ok: true, flushed: flushed.length, items: flushed }
+    }
+    case '/dsh-mesh/api/inbox/accept': {
+      if (!body.path) throw new Error('path 必填')
+      const result = await acceptInbox(settings, body.path, {
+        kind: body.kind || 'notes',
+        title: body.title,
+      })
+      scheduleSnapshot(settings, 'ui:accept')
+      return { ok: true, ...result }
+    }
+    case '/dsh-mesh/api/inbox/reject': {
+      if (!body.path) throw new Error('path 必填')
+      const result = await rejectInbox(settings, body.path)
+      scheduleSnapshot(settings, 'ui:reject')
+      return { ok: true, ...result }
+    }
+    case '/dsh-mesh/api/memory/write': {
+      if (!body.title || !body.content) throw new Error('title 和 content 必填')
+      const file = await writeNote(settings, {
+        kind: body.kind || 'notes',
+        memoryType: body.memoryType || 'reference',
+        title: body.title,
+        description: body.description,
+        content: body.content,
+        tags: Array.isArray(body.tags) ? body.tags : ['ui'],
+        device: settings.deviceName,
+      })
+      scheduleSnapshot(settings, 'ui:write')
+      return { ok: true, path: path.relative(settings.memoryDir, file).replace(/\\/g, '/') }
+    }
+    case '/dsh-mesh/api/memory/update': {
+      if (!body.path) throw new Error('path 必填')
+      const patch = {}
+      for (const key of ['content', 'title', 'description']) {
+        if (body[key] !== undefined) patch[key] = body[key]
+      }
+      const result = await updateNote(settings, body.path, patch)
+      scheduleSnapshot(settings, 'ui:update')
+      return { ok: true, ...result }
+    }
+    case '/dsh-mesh/api/memory/delete': {
+      if (!body.path) throw new Error('path 必填')
+      const result = await trashNote(settings, body.path)
+      scheduleSnapshot(settings, 'ui:delete')
+      return { ok: true, ...result }
+    }
+    case '/dsh-mesh/api/backup/snapshot': {
+      const result = await snapshot(settings, 'ui')
+      return { ok: true, ...result }
+    }
+    case '/dsh-mesh/api/backup/restore': {
+      const result = await restoreSnapshot(settings, body.commit, { confirm: body.confirm === true })
+      return { ok: true, ...result }
+    }
+    default:
+      throw new Error('not found')
+  }
+}
+
 export function registerDashboard(ctx, settings) {
   let dispose = () => {}
   let listening = false
@@ -174,8 +282,8 @@ export function registerDashboard(ctx, settings) {
         writeJson(res, 403, { ok: false, error: 'non-loopback request' })
         return
       }
-      if (req.method !== 'GET') {
-        writeJson(res, 405, { ok: false, error: 'GET only' })
+      if (req.method !== 'GET' && req.method !== 'POST') {
+        writeJson(res, 405, { ok: false, error: 'GET/POST only' })
         return
       }
       const url = new URL(req.url || '/', 'http://dsh.internal')
@@ -185,6 +293,16 @@ export function registerDashboard(ctx, settings) {
       }
       const pathname = url.pathname
       try {
+        if (req.method === 'POST') {
+          if (!mutationAllowed(req)) {
+            writeJson(res, 403, { ok: false, error: '写操作需要 x-dsh-mesh-action 头且必须同源' })
+            return
+          }
+          const body = await readJsonBody(req)
+          const result = await handleMutation(pathname, body, settings)
+          writeJson(res, 200, result)
+          return
+        }
         if (pathname === '/' || pathname === '/dsh-mesh' || pathname === '/dsh-mesh/') {
           writeText(res, 200, 'text/html', HTML)
           return
@@ -236,6 +354,11 @@ export function registerDashboard(ctx, settings) {
           const rel = url.searchParams.get('path') || ''
           const text = await readInbox(settings, rel)
           writeJson(res, 200, { ok: true, path: rel, text: text.slice(0, 200000) })
+          return
+        }
+        if (pathname === '/dsh-mesh/api/backup') {
+          const items = await listSnapshots(settings)
+          writeJson(res, 200, { ok: true, count: items.length, items })
           return
         }
         if (pathname === '/dsh-mesh/api/conflicts') {
