@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.5 — 2026-11-01
+
+原生 manifest 增加 `inbox`（待确认草稿），供 Go 原生记忆页在远程模式展示。
+
+- `$DSH_HOME/dsh-go/dsh-mesh.json` 新增 `inbox: [{path,title,turns,updatedAt}]`（最多 20 条）。
+- 远程 Host 可通过 `workspaceFiles/read` 读到；配合 `/mesh-memory` 命令即可在原生页接受/忽略。
+- 76 例测试（73 通过 / 3 跳过）。
 ## 0.9.4 — 2026-11-01
 
 移除原生 dshGo 面板贡献，Go 的「记忆」只保留 Web GUI（island）。
@@ -286,6 +293,7 @@
 ## 0.1.0 — 2026-10-31
 
 - Initial MVP: shared memory, 13 `mesh_*` tools, Remote delegation, file transfer.
+
 
 
 

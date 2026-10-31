@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { stamp } from './config.js'
 
 const AGENTS_TEMPLATE = `# 共享记忆（dsh-mesh）
@@ -463,6 +463,35 @@ export async function writeNote(settings, {
   return file
 }
 
+function listInboxDrafts(settings) {
+  const dir = path.join(settings.dshHome || '', 'dsh-mesh', 'inbox', 'sessions')
+  let entries = []
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const out = []
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.md') || entry.name.startsWith('.')) continue
+    try {
+      const file = path.join(dir, entry.name)
+      const head = readFileSync(file, 'utf8').slice(0, 4096)
+      const title = (head.match(/^title:\s*(.+)$/m) || [])[1] || entry.name.replace(/\.md$/, '')
+      const turns = Number((head.match(/^turns:\s*(\d+)/m) || [])[1] || 0)
+      const updatedAt = (head.match(/^updatedAt:\s*(.+)$/m) || [])[1] || ''
+      out.push({
+        path: `sessions/${entry.name}`,
+        title: String(title).replace(/^["']|["']$/g, ''),
+        turns,
+        updatedAt: String(updatedAt).replace(/^["']|["']$/g, ''),
+        mtimeMs: statSync(file).mtimeMs,
+      })
+    } catch {}
+  }
+  return out.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, 20)
+}
+
 async function buildNativeManifest(settings) {
   const tree = await treeMemory(settings)
   const files = []
@@ -493,6 +522,12 @@ async function buildNativeManifest(settings) {
     updatedAt: new Date().toISOString(),
     truncated: tree.truncated === true,
     files,
+    inbox: listInboxDrafts(settings).map((item) => ({
+      path: item.path,
+      title: item.title,
+      turns: item.turns,
+      updatedAt: item.updatedAt,
+    })),
   }
   const file = path.join(dir, 'dsh-mesh.json')
   await writeFileAtomic(file, `${JSON.stringify(out, null, 2)}\n`)
@@ -735,3 +770,4 @@ export async function treeMemory(settings) {
   })
   return { generatedAt: new Date().toISOString(), root, truncated, treeLimit: TREE_LIMIT }
 }
+
