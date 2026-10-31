@@ -140,3 +140,24 @@ test('超大单文件被跳过而不是拖垮召回（P1-10）', async (t) => {
   const small = await buildRecall(settings, 'smalltoken')
   assert.ok(small.files.includes('memory/facts/small.md'))
 })
+
+test('召回缓存按 mtime/size 失效，不会返回旧内容（P1-10）', async (t) => {
+  const { settings, cleanup, memoryDir } = await makeSettings()
+  t.after(cleanup)
+  await ensureLayout(settings)
+  const rel = 'memory/facts/cache.md'
+  await writeMemoryFile(memoryDir, rel, memoryDoc({ title: 'cache', body: 'the cachetoken v1' }), NOW - 5000)
+  const first = await buildRecall(settings, 'cachetoken')
+  assert.ok(first.files.includes(rel), '首次应命中')
+  assert.match(first.text, /v1/)
+
+  // 同路径改写 + 更新 mtime：缓存必须失效
+  await writeMemoryFile(memoryDir, rel, memoryDoc({ title: 'cache', body: 'the cachetoken v2' }), NOW)
+  const second = await buildRecall(settings, 'cachetoken')
+  assert.match(second.text, /v2/, '改写后应读到新内容')
+
+  // 新增文件也要进入候选
+  await writeMemoryFile(memoryDir, 'memory/facts/fresh.md', memoryDoc({ title: 'fresh', body: 'brandnewtoken' }), NOW + 5000)
+  const third = await buildRecall(settings, 'brandnewtoken')
+  assert.ok(third.files.includes('memory/facts/fresh.md'))
+})

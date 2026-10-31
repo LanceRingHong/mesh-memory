@@ -166,3 +166,146 @@ test('parseFrontmatter 处理 BOM/折叠块/流式数组/缺尾换行（P2-4）'
   const empty = store.parseFrontmatter('')
   assert.deepEqual(empty, { attrs: {}, body: '' })
 })
+
+test('updateNote 保留 id/createdAt，未传字段不变（P2-16）', async (t) => {
+  const { settings, cleanup } = await makeSettings()
+  t.after(cleanup)
+  await store.ensureLayout(settings)
+  const file = await store.writeNote(settings, {
+    kind: 'facts',
+    title: 'old title',
+    description: 'old desc',
+    content: 'body one',
+  })
+  const rel = path.relative(settings.memoryDir, file).replace(/\\/g, '/')
+  const before = store.parseFrontmatter(await fs.readFile(file, 'utf8')).attrs
+
+  const out = await store.updateNote(settings, rel, { title: 'new title', content: 'body two', tags: ['a'] })
+  assert.equal(out.path, rel)
+
+  const after = store.parseFrontmatter(await fs.readFile(file, 'utf8'))
+  assert.equal(after.attrs.id, before.id)
+  assert.equal(after.attrs.createdAt, before.createdAt)
+  assert.equal(after.attrs.title, 'new title')
+  assert.equal(after.attrs.description, 'old desc')
+  assert.deepEqual(after.attrs.tags, ['a'])
+  assert.ok(after.attrs.updatedAt)
+  assert.match(after.body, /body two/)
+
+  await assert.rejects(() => store.updateNote(settings, 'AGENTS.shared.md', { title: 'x' }), /只允许更新/)
+})
+
+test('软删除进回收站并可恢复（P2-16）', async (t) => {
+  const { settings, cleanup } = await makeSettings()
+  t.after(cleanup)
+  await store.ensureLayout(settings)
+  const file = await store.writeNote(settings, { kind: 'facts', title: 'trash me', content: 'x' })
+  const rel = path.relative(settings.memoryDir, file).replace(/\\/g, '/')
+
+  const moved = await store.trashNote(settings, rel)
+  assert.match(moved.trash, /^\.trash\/memory\/facts\//)
+  assert.equal(await fs.stat(file).then(() => true).catch(() => false), false)
+
+  const items = await store.listTrash(settings)
+  assert.equal(items.length, 1)
+  assert.ok(items[0].trash.endsWith('.md'))
+
+  const restored = await store.restoreTrash(settings, items[0].trash)
+  assert.equal(restored.restored, rel)
+  assert.ok(await fs.stat(file).then(() => true).catch(() => false))
+
+  // 目标已存在时拒绝覆盖：先回收，再在原路径重建同名文件
+  await store.trashNote(settings, rel)
+  await fs.writeFile(file, 'rebuilt\n', 'utf8')
+  const items2 = await store.listTrash(settings)
+  await assert.rejects(() => store.restoreTrash(settings, items2[0].trash), /拒绝覆盖/)
+})
+
+test('listConflicts 与 counts.conflicts 识别冲突副本（P2-1）', async (t) => {
+  const { settings, cleanup, memoryDir } = await makeSettings()
+  t.after(cleanup)
+  await store.ensureLayout(settings)
+  await writeMemoryFile(
+    memoryDir,
+    'memory/facts/a.sync-conflict-20260101-000000-AAAAAAA.md',
+    '---\ntitle: conflict copy\n---\nstale\n',
+  )
+  const items = await store.listConflicts(settings)
+  assert.equal(items.length, 1)
+  assert.match(items[0].path, /sync-conflict/)
+
+  const c = await store.counts(settings)
+  assert.equal(c.conflicts, 1)
+})
+
+test('树标记冲突文件并隐藏 .mesh 内部文件（P2-11）', async (t) => {
+  const { settings, cleanup, memoryDir } = await makeSettings()
+  t.after(cleanup)
+  await store.ensureLayout(settings)
+  await writeMemoryFile(memoryDir, 'memory/facts/a.sync-conflict-20260101-000000-AAAAAAA.md', 'x')
+  await writeMemoryFile(memoryDir, '.mesh/skills.json', '{}')
+
+  const tree = await store.treeMemory(settings)
+  const memory = tree.root.find((node) => node.path === 'memory')
+  const facts = memory.children.find((node) => node.path === 'memory/facts')
+  const conflict = facts.children.find((node) => node.name.includes('sync-conflict'))
+  assert.equal(conflict.conflict, true)
+
+  const mesh = tree.root.find((node) => node.path === '.mesh')
+  assert.deepEqual(mesh.children, [])
+  assert.equal(mesh.hiddenChildren, true)
+  assert.equal(tree.truncated, false)
+  assert.equal(tree.treeLimit, 300)
+})
+
+test('树在超过 300 项时标记 truncated（P2-11）', async (t) => {
+  const { settings, cleanup, memoryDir } = await makeSettings()
+  t.after(cleanup)
+  await store.ensureLayout(settings)
+  await fs.mkdir(path.join(memoryDir, 'memory', 'notes'), { recursive: true })
+  await Promise.all(
+    Array.from({ length: 305 }, (_, i) =>
+      fs.writeFile(path.join(memoryDir, 'memory', 'notes', `n${String(i).padStart(3, '0')}.md`), 'x', 'utf8'),
+    ),
+  )
+  const tree = await store.treeMemory(settings)
+  assert.equal(tree.truncated, true)
+})
+
+test('搜索与召回同口径：失效条目不进搜索，skills 可搜（P2-1）', async (t) => {
+  const { settings, cleanup, memoryDir } = await makeSettings()
+  t.after(cleanup)
+  await store.ensureLayout(settings)
+
+  await writeMemoryFile(
+    memoryDir,
+    'memory/facts/old.md',
+    '---\ntitle: old\ndescription: ""\nsupersededBy: "memory/facts/new.md"\n---\nthe searchneedle old\n',
+  )
+  await writeMemoryFile(
+    memoryDir,
+    'memory/facts/new.md',
+    '---\ntitle: new\ndescription: ""\n---\nthe searchneedle new\n',
+  )
+  await writeMemoryFile(memoryDir, 'skills/demo/SKILL.md', '# demo\n\nthe searchneedle skill\n')
+
+  const results = await store.searchMemory(settings, 'searchneedle', 20)
+  const paths = results.map((item) => item.path)
+  assert.equal(paths.includes('memory/facts/old.md'), false, '被取代的条目不进搜索')
+  assert.ok(paths.includes('memory/facts/new.md'))
+  assert.ok(paths.includes('skills/demo/SKILL.md'), 'skills 应可搜索')
+})
+
+test('搜索结果标记冲突副本（P2-1）', async (t) => {
+  const { settings, cleanup, memoryDir } = await makeSettings()
+  t.after(cleanup)
+  await store.ensureLayout(settings)
+  await writeMemoryFile(
+    memoryDir,
+    'memory/facts/a.sync-conflict-20260101-000000-AAAAAAA.md',
+    '---\ntitle: conflict\n---\nthe conflicttoken copy\n',
+  )
+  const results = await store.searchMemory(settings, 'conflicttoken', 10)
+  assert.equal(results.length, 1)
+  assert.equal(results[0].conflict, true)
+})

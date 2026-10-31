@@ -234,8 +234,26 @@ async function listSkillDirs(root) {
   return entries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => path.join(root, e.name))
 }
 
-async function dirStats(dir) {
-  let files = 0
+/** 发现目录里的符号链接（不跟随），用于 skill 同步的安全检查（P2-6）。 */
+async function findSymlink(dir) {
+  let entries
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true })
+  } catch {
+    return null
+  }
+  for (const entry of entries) {
+    const child = path.join(dir, entry.name)
+    if (entry.isSymbolicLink()) return child
+    if (entry.isDirectory()) {
+      const hit = await findSymlink(child)
+      if (hit) return hit
+    }
+  }
+  return null
+}
+
+async function dirStats(dir) {  let files = 0
   let bytes = 0
   let entries
   try {
@@ -268,20 +286,37 @@ export async function previewSkills(settings) {
   const sourceDirs = await listSkillDirs(sourceRoot)
   const copy = []
   const skip = []
+  const maxBytes = Number(settings.maxSkillBytes) || 2_000_000
   for (const src of sourceDirs) {
     const name = path.basename(src)
     if (!existsSync(path.join(src, 'SKILL.md'))) {
       skip.push({ name, reason: '缺少 SKILL.md' })
       continue
     }
+    const link = await findSymlink(src)
+    if (link) {
+      skip.push({ name, reason: `包含符号链接，拒绝同步（${path.relative(src, link)}）` })
+      continue
+    }
+    const stats = await dirStats(src)
+    if (stats.bytes > maxBytes) {
+      skip.push({ name, reason: `超过 maxSkillBytes（${stats.bytes} > ${maxBytes}）` })
+      continue
+    }
     if (existsSync(path.join(targetRoot, name))) {
       skip.push({ name, reason: '本地已存在同名 skill（需要 force 才覆盖）' })
       continue
     }
-    const stats = await dirStats(src)
     copy.push({ name, ...stats })
   }
-  return { sourceRoot, targetRoot, copy, skip, forceRequired: skip.filter((item) => item.reason.includes('force')).map((item) => item.name) }
+  return {
+    sourceRoot,
+    targetRoot,
+    copy,
+    skip,
+    forceRequired: skip.filter((item) => item.reason.includes('force')).map((item) => item.name),
+    maxSkillBytes: maxBytes,
+  }
 }
 
 export async function syncSkills(settings, { force = false } = {}) {
@@ -291,11 +326,23 @@ export async function syncSkills(settings, { force = false } = {}) {
   const sourceDirs = await listSkillDirs(sourceRoot)
   const copied = []
   const skipped = []
+  const maxBytes = Number(settings.maxSkillBytes) || 2_000_000
   for (const src of sourceDirs) {
     const name = path.basename(src)
     const skillFile = path.join(src, 'SKILL.md')
     if (!existsSync(skillFile)) {
       skipped.push(`${name} (no SKILL.md)`)
+      continue
+    }
+    // 内容护栏（P2-6）：拒绝符号链接与超大目录，不做整目录盲拷。
+    const link = await findSymlink(src)
+    if (link) {
+      skipped.push(`${name} (contains symlink)`)
+      continue
+    }
+    const stats = await dirStats(src)
+    if (stats.bytes > maxBytes) {
+      skipped.push(`${name} (too large: ${stats.bytes} bytes)`)
       continue
     }
     const dst = path.join(targetRoot, name)

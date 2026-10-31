@@ -4,6 +4,7 @@ import {
   callRemote,
   completionOf,
   pickWorkspace,
+  readSession,
   runOnHost,
   transferOutcome,
 } from '../src/remote.js'
@@ -174,4 +175,36 @@ test('runOnHost：显式工作区命中时不标记 fallback', async () => {
   const result = await runOnHost(ctx, exec(), { hostId: 'h', workspacePath: '/sdcard', task: 'x', waitMs: 1000 })
   assert.equal(result.workspaceFallback, false)
   assert.equal(result.finished, true)
+})
+
+test('readSession 透传 cursor 并返回 nextCursor（P2-12）', async () => {
+  const { ctx, calls } = fakeCtx({
+    remote_read_session: {
+      status: 'idle',
+      records: [],
+      nextCursor: { throughSeq: 42, beforeSeq: 84 },
+    },
+  })
+  const out = await readSession(ctx, exec(), {
+    hostId: 'h',
+    workspaceId: 'w',
+    sessionId: 's',
+    cursor: { beforeSeq: 84 },
+  })
+  assert.deepEqual(calls[0].arguments.cursor, { beforeSeq: 84 })
+  assert.deepEqual(out.nextCursor, { throughSeq: 42, beforeSeq: 84 })
+  assert.equal(out.lastSeq, 42)
+  assert.equal(out.truncated, false)
+})
+
+test('summarizeSession 对超长历史标记 truncated（P2-12）', async () => {
+  const records = Array.from({ length: 205 }, (_, i) => ({
+    type: 'assistant/message',
+    json: JSON.stringify({ type: 'assistant/message', data: { message: { content: [{ type: 'text', text: `m${i}` }] } } }),
+  }))
+  const { ctx } = fakeCtx({ remote_read_session: { status: 'idle', records } })
+  const out = await readSession(ctx, exec(), { hostId: 'h', workspaceId: 'w', sessionId: 's' })
+  assert.equal(out.messageCount, 205)
+  assert.equal(out.messages.length, 200)
+  assert.equal(out.truncated, true)
 })

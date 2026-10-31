@@ -86,6 +86,7 @@ function snapshot(settings) {
     ['事实', 'memory/facts'],
     ['决策', 'memory/decisions'],
     ['项目', 'memory/projects'],
+    ['笔记', 'memory/notes'],
     ['摘要', 'sessions'],
     ['索引', 'index'],
   ]) {
@@ -101,8 +102,10 @@ function snapshot(settings) {
     facts: countSync(root, 'memory/facts'),
     decisions: countSync(root, 'memory/decisions'),
     projects: countSync(root, 'memory/projects'),
+    notes: countSync(root, 'memory/notes'),
     sessions: countSync(root, 'sessions'),
-    total: files.length,
+    totalFiles: files.length,
+    total: files.slice(0, 50).length,
     files: files.slice(0, 50).map((row) => ({
       title: row.title,
       subtitle: row.path,

@@ -65,6 +65,10 @@ export function settingsOf(config = {}) {
     recallMaxChars: clamp(config.recallMaxChars, 1000, 20_000, 6000),
     // 上传白名单（P0-3）：默认只允许共享目录与 Downloads，其余显式配置。
     allowedUploadRoots: configuredRoots.length ? configuredRoots : defaultUploadRoots(memoryDir),
+    // 只读页面 token（P2-7）：留空表示不校验（仍只绑定 127.0.0.1）。
+    dashboardToken: String(config.dashboardToken || '').trim(),
+    // skills 同步上限（P2-6）：超过则跳过，避免同步目录塞进巨型技能。
+    maxSkillBytes: clamp(config.maxSkillBytes, 100_000, 20_000_000, 2_000_000),
   }
 }
 

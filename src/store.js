@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { stamp } from './config.js'
 
@@ -23,6 +23,37 @@ const AGENTS_TEMPLATE = `# 共享记忆（dsh-mesh）
 const SESSION_ID_RE = /^[A-Za-z0-9._-]{1,128}$/
 const MANAGED_FILE_RE = /^(AGENTS\.shared\.md|skills\/|memory\/|sessions\/)/
 
+function parseDate(value) {
+  if (value === undefined || value === null || value === '') return null
+  const t = Date.parse(String(value))
+  return Number.isFinite(t) ? t : NaN
+}
+
+/**
+ * 记忆有效性（P1-8 / P2-1）：搜索与召回共用同一口径，避免“搜得到、召回没有”。
+ * - supersededBy 存在即视为失效；
+ * - validAt 在未来、invalidAt 已过都失效；
+ * - 时间无法解析时保留并告警，不静默丢数据。
+ */
+export function isDocValid(attrs = {}, at = Date.now()) {
+  if (attrs.supersededBy) return false
+  const invalidAt = parseDate(attrs.invalidAt)
+  if (Number.isNaN(invalidAt)) console.warn('[dsh-mesh] invalidAt 无法解析，已忽略该限制:', attrs.invalidAt)
+  else if (invalidAt !== null && invalidAt <= at) return false
+  const validAt = parseDate(attrs.validAt)
+  if (Number.isNaN(validAt)) console.warn('[dsh-mesh] validAt 无法解析，已忽略该限制:', attrs.validAt)
+  else if (validAt !== null && validAt > at) return false
+  return true
+}
+
+export function isConflictPath(rel) {
+  return /\.sync-conflict-/i.test(String(rel || ''))
+}
+
+export function sha256(text) {
+  return createHash('sha256').update(String(text ?? ''), 'utf8').digest('hex')
+}
+
 export async function ensureLayout(settings) {
   const root = settings.memoryDir
   const dirs = [
@@ -31,9 +62,11 @@ export async function ensureLayout(settings) {
     path.join(root, 'memory', 'facts'),
     path.join(root, 'memory', 'decisions'),
     path.join(root, 'memory', 'projects'),
+    path.join(root, 'memory', 'notes'),
     path.join(root, 'sessions', settings.deviceSlug),
     path.join(root, 'index'),
     path.join(root, '.mesh'),
+    path.join(root, '.trash'),
   ]
   for (const dir of dirs) await fs.mkdir(dir, { recursive: true })
 
@@ -44,11 +77,46 @@ export async function ensureLayout(settings) {
   if (!existsSync(devices)) {
     await fs.writeFile(devices, JSON.stringify({ devices: [] }, null, 2), 'utf8')
   }
-  for (const file of ['sessions.jsonl', 'files.jsonl']) {
-    const p = path.join(root, 'index', file)
-    if (!existsSync(p)) await fs.writeFile(p, '', 'utf8')
-  }
+  const sessions = path.join(root, 'index', 'sessions.jsonl')
+  if (!existsSync(sessions)) await fs.writeFile(sessions, '', 'utf8')
   return { root, created: true }
+}
+
+/**
+ * 设备注册表（P2-2）：插件自己维护本机条目，10 分钟内不重复写，避免同步抖动。
+ */
+export async function updateDevices(settings, extra = {}) {
+  const file = path.join(settings.memoryDir, 'index', 'devices.json')
+  let data = { devices: [] }
+  try {
+    data = JSON.parse(await fs.readFile(file, 'utf8'))
+  } catch {}
+  const devices = Array.isArray(data.devices) ? data.devices : []
+  const now = Date.now()
+  const entry = {
+    name: settings.deviceName,
+    deviceSlug: settings.deviceSlug,
+    platform: process.platform,
+    ...extra,
+    lastSeen: new Date(now).toISOString(),
+  }
+  const idx = devices.findIndex(
+    (item) => item?.deviceSlug === settings.deviceSlug || item?.name === settings.deviceName,
+  )
+  if (idx >= 0) {
+    const prev = devices[idx] || {}
+    const last = Date.parse(prev.lastSeen || '')
+    const merged = { ...prev, ...entry }
+    if (Number.isFinite(last) && now - last < 10 * 60 * 1000) {
+      devices[idx] = merged
+      return devices
+    }
+    devices[idx] = merged
+  } else {
+    devices.push(entry)
+  }
+  await writeFileAtomic(file, `${JSON.stringify({ devices }, null, 2)}\n`)
+  return devices
 }
 
 /**
@@ -173,7 +241,140 @@ function defaultDescription(content) {
   return (line || '').slice(0, 160)
 }
 
-/** 唯一临时文件 + rename，避免半写文件与并发覆盖（P1-7/P2-3）。 */
+/**
+ * 更新一条记忆（P2-16）：保留 id/createdAt/device，重写 frontmatter 与正文。
+ * 只允许 memory/ 下的 .md，路径走 readInside/safeRel。
+ */
+export async function updateNote(settings, rel, patch = {}) {
+  const file = safeRel(settings, rel)
+  if (!/^memory\/[^/]+\/[^/]+\.md$/i.test(String(rel))) throw new Error('只允许更新 memory/<kind>/<file>.md')
+  const text = await readInside(settings, rel)
+  const parsed = parseFrontmatter(text)
+  const attrs = { ...parsed.attrs }
+  const allowed = ['title', 'description', 'memoryType', 'tags', 'aliases', 'baseline', 'baselinePriority', 'validAt', 'invalidAt', 'supersededBy']
+  for (const key of allowed) {
+    if (patch[key] !== undefined) attrs[key] = patch[key]
+  }
+  if (!attrs.title) throw new Error('更新后标题不能为空')
+  if (patch.content !== undefined) attrs.updatedAt = new Date().toISOString()
+  const lines = ['---']
+  const order = ['id', 'title', 'kind', 'memoryType', 'description', 'device', 'createdAt', 'updatedAt', 'tags', 'aliases', 'baseline', 'baselinePriority', 'validAt', 'invalidAt', 'supersededBy']
+  const emit = (key, value) => {
+    if (value === undefined || value === null || value === '') return
+    lines.push(`${key}: ${typeof value === 'string' ? JSON.stringify(value) : JSON.stringify(value)}`)
+  }
+  for (const key of order) {
+    if (key === 'kind' && attrs.kind === undefined) {
+      emit('kind', String(rel).split('/')[1])
+      continue
+    }
+    if (key === 'id' && !attrs.id) {
+      emit('id', randomUUID())
+      continue
+    }
+    emit(key, attrs[key])
+  }
+  lines.push('---', '')
+  const body = patch.content !== undefined ? String(patch.content).trim() : String(parsed.body || '').trim()
+  await writeFileAtomic(file, `${lines.join('\n')}${body}\n`)
+  await publishNativeManifest(settings).catch(() => {})
+  return { path: String(rel), updatedAt: attrs.updatedAt || null }
+}
+
+/** 软删除：保留相对目录移入 .trash/，不直接删文件（P2-16）。 */
+export async function trashNote(settings, rel) {
+  const relPosix = String(rel || '').replace(/\\/g, '/')
+  if (!relPosix.startsWith('memory/') && !relPosix.startsWith('sessions/')) {
+    throw new Error('只允许移入回收站 memory/ 或 sessions/ 下的文件')
+  }
+  const file = safeRel(settings, relPosix)
+  const link = await fs.lstat(file)
+  if (link.isSymbolicLink() || !link.isFile()) throw new Error('只允许回收站普通文件')
+  const targetDir = path.join(settings.memoryDir, '.trash', path.dirname(relPosix))
+  await fs.mkdir(targetDir, { recursive: true })
+  const name = `${stamp()}-${randomBytes(3).toString('hex')}-${path.basename(file)}`
+  await fs.rename(file, path.join(targetDir, name))
+  await publishNativeManifest(settings).catch(() => {})
+  return { moved: relPosix, trash: `.trash/${path.dirname(relPosix).replace(/\\/g, '/')}/${name}`.replace('//', '/') }
+}
+
+export async function listTrash(settings) {
+  const root = path.join(settings.memoryDir, '.trash')
+  const rows = []
+  const walk = async (rel) => {
+    let entries
+    try {
+      entries = await fs.readdir(path.join(root, rel), { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const child = rel ? `${rel}/${entry.name}` : entry.name
+      if (entry.isDirectory()) {
+        await walk(child)
+        continue
+      }
+      if (!entry.isFile() || !/\.md$/i.test(entry.name)) continue
+      try {
+        const stat = await fs.stat(path.join(root, child))
+        rows.push({ trash: `.trash/${child}`, size: stat.size, mtimeMs: stat.mtimeMs })
+      } catch {}
+    }
+  }
+  await walk('')
+  return rows.sort((a, b) => b.mtimeMs - a.mtimeMs)
+}
+
+/** 从回收站恢复到原路径；目标已存在时拒绝覆盖。 */
+export async function restoreTrash(settings, trashRel) {
+  const rel = String(trashRel || '').replace(/\\/g, '/')
+  if (!rel.startsWith('.trash/')) throw new Error('只接受 .trash/ 下的相对路径')
+  const src = safeRel(settings, rel)
+  const link = await fs.lstat(src)
+  if (!link.isFile()) throw new Error('回收站条目不是普通文件')
+  const inner = rel.slice('.trash/'.length)
+  const base = path.basename(inner)
+  const match = base.match(/^\d{8}-\d{6}-[0-9a-f]{6}-(.+)$/)
+  const original = match ? match[1] : base
+  const targetRel = path.posix.join(path.posix.dirname(inner), original)
+  if (!targetRel.startsWith('memory/') && !targetRel.startsWith('sessions/')) {
+    throw new Error('拒绝恢复到 memory/ 与 sessions/ 之外的路径')
+  }
+  const dst = safeRel(settings, targetRel)
+  if (existsSync(dst)) throw new Error(`目标已存在，拒绝覆盖：${targetRel}`)
+  await fs.mkdir(path.dirname(dst), { recursive: true })
+  await fs.rename(src, dst)
+  await publishNativeManifest(settings).catch(() => {})
+  return { restored: targetRel }
+}
+
+/** 列出 Syncthing 冲突副本（P2-1/P2-16），供 UI 与工具展示。 */
+export async function listConflicts(settings) {
+  const found = []
+  const walkConflicts = async (rel) => {
+    let entries
+    try {
+      entries = await fs.readdir(path.join(settings.memoryDir, rel), { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue
+      const child = rel ? `${rel}/${entry.name}` : entry.name
+      if (entry.isDirectory()) {
+        await walkConflicts(child)
+        continue
+      }
+      if (!entry.isFile() || !isConflictPath(entry.name)) continue
+      try {
+        const stat = await fs.stat(path.join(settings.memoryDir, child))
+        found.push({ path: child, size: stat.size, mtimeMs: stat.mtimeMs })
+      } catch {}
+    }
+  }
+  for (const base of ['']) await walkConflicts(base)
+  return found.sort((a, b) => b.mtimeMs - a.mtimeMs)
+}
 export async function writeFileAtomic(file, data) {
   const dir = path.dirname(file)
   await fs.mkdir(dir, { recursive: true })
@@ -271,6 +472,7 @@ async function buildNativeManifest(settings) {
     device: settings.deviceName,
     root: settings.memoryDir,
     updatedAt: new Date().toISOString(),
+    truncated: tree.truncated === true,
     files,
   }
   const file = path.join(dir, 'dsh-mesh.json')
@@ -343,16 +545,21 @@ export async function searchMemory(settings, query, limit) {
     path.join(settings.memoryDir, 'AGENTS.shared.md'),
     ...(await walk(settings.memoryDir, 'memory')),
     ...(await walk(settings.memoryDir, 'sessions')),
+    ...(await walk(settings.memoryDir, 'skills')),
   ]
   const results = []
   for (const file of files) {
+    const rel = path.relative(settings.memoryDir, file).replace(/\\/g, '/')
+    if (rel.startsWith('index/')) continue
     let text
     try {
-      const rel = path.relative(settings.memoryDir, file).replace(/\\/g, '/')
       text = await readInside(settings, rel, { maxBytes: 2_000_000 })
     } catch {
       continue
     }
+    // 与自动召回同一口径（P2-1）：失效/被取代的条目不进搜索结果。
+    const parsed = parseFrontmatter(text)
+    if (rel !== 'AGENTS.shared.md' && !isDocValid(parsed.attrs)) continue
     const lower = text.toLowerCase()
     let score = 0
     let first = -1
@@ -369,9 +576,13 @@ export async function searchMemory(settings, query, limit) {
       score += Math.min(10, count)
     }
     if (score === 0) continue
-    const rel = path.relative(settings.memoryDir, file).replace(/\\/g, '/')
-    if (rel.startsWith('index/')) continue
-    results.push({ path: rel, score, snippet: snippet(text, terms, Math.max(0, first)) })
+    results.push({
+      path: rel,
+      score,
+      title: parsed.attrs.title ? String(parsed.attrs.title) : null,
+      conflict: isConflictPath(rel),
+      snippet: snippet(text, terms, Math.max(0, first)),
+    })
   }
   results.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path))
   return results.slice(0, Math.min(limit || settings.maxSearchResults, 100))
@@ -388,14 +599,15 @@ export async function appendJsonl(settings, name, value) {
 }
 
 export async function counts(settings) {
-  const [facts, decisions, projects, notes, sessions] = await Promise.all([
+  const [facts, decisions, projects, notes, sessions, conflicts] = await Promise.all([
     walk(settings.memoryDir, 'memory/facts').then((x) => x.length),
     walk(settings.memoryDir, 'memory/decisions').then((x) => x.length),
     walk(settings.memoryDir, 'memory/projects').then((x) => x.length),
     walk(settings.memoryDir, 'memory/notes').then((x) => x.length),
     walk(settings.memoryDir, 'sessions').then((x) => x.length),
+    listConflicts(settings).then((x) => x.length).catch(() => 0),
   ])
-  return { facts, decisions, projects, notes, sessions }
+  return { facts, decisions, projects, notes, sessions, conflicts }
 }
 
 export async function recentFiles(settings, relBase, limit = 10) {
@@ -421,25 +633,39 @@ export async function recentFiles(settings, relBase, limit = 10) {
   return rows.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, Math.max(1, limit))
 }
 
+const TREE_LIMIT = 300
+const HIDDEN_TREE_DIRS = new Set(['.mesh', '.stversions', '.trash'])
+
 async function treeDir(settings, rel, depth) {
   const abs = path.join(settings.memoryDir, rel)
   let entries
   try {
     entries = await fs.readdir(abs, { withFileTypes: true })
   } catch {
-    return []
+    return { nodes: [], truncated: false }
   }
   const nodes = []
+  let truncated = false
+  let childTruncated = false
   for (const entry of entries) {
     if (entry.name === '.stfolder' || entry.name === '.stignore' || entry.name === '.DS_Store') continue
     const childRel = rel === '' ? entry.name : `${rel}/${entry.name}`
     if (entry.isDirectory()) {
-      const children = depth < 5 ? await treeDir(settings, childRel, depth + 1) : []
+      const hidden = HIDDEN_TREE_DIRS.has(entry.name)
+      const inner = !hidden && depth < 5 ? await treeDir(settings, childRel, depth + 1) : { nodes: [], truncated: false }
+      if (inner.truncated) childTruncated = true
       let mtimeMs = null
       try {
         mtimeMs = (await fs.stat(path.join(abs, entry.name))).mtimeMs
       } catch {}
-      nodes.push({ name: entry.name, path: childRel, type: 'dir', mtimeMs, children })
+      nodes.push({
+        name: entry.name,
+        path: childRel,
+        type: 'dir',
+        mtimeMs,
+        children: inner.nodes,
+        ...(hidden ? { hiddenChildren: true } : {}),
+      })
     } else if (entry.isFile()) {
       try {
         const stat = await fs.stat(path.join(abs, entry.name))
@@ -454,7 +680,16 @@ async function treeDir(settings, rel, depth) {
             if (desc) description = desc[1].trim().replace(/^["']|["']$/g, '')
           } catch {}
         }
-        nodes.push({ name: entry.name, path: childRel, type: 'file', size: stat.size, mtimeMs: stat.mtimeMs, title, description })
+        nodes.push({
+          name: entry.name,
+          path: childRel,
+          type: 'file',
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+          title,
+          description,
+          ...(isConflictPath(entry.name) ? { conflict: true } : {}),
+        })
       } catch {}
     }
   }
@@ -462,12 +697,16 @@ async function treeDir(settings, rel, depth) {
     if (a.type !== b.type) return a.type === 'dir' ? -1 : 1
     return a.name.localeCompare(b.name)
   })
-  return nodes.slice(0, 300)
+  if (nodes.length > TREE_LIMIT) {
+    truncated = true
+    nodes.length = TREE_LIMIT
+  }
+  return { nodes, truncated: truncated || childTruncated }
 }
 
 export async function treeMemory(settings) {
   await ensureLayout(settings)
-  const root = await treeDir(settings, '', 0)
+  const { nodes: root, truncated } = await treeDir(settings, '', 0)
   const order = ['AGENTS.shared.md', 'skills', 'memory', 'sessions', 'index', '.mesh']
   root.sort((a, b) => {
     const ia = order.indexOf(a.path)
@@ -475,5 +714,5 @@ export async function treeMemory(settings) {
     if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib)
     return 0
   })
-  return { generatedAt: new Date().toISOString(), root }
+  return { generatedAt: new Date().toISOString(), root, truncated, treeLimit: TREE_LIMIT }
 }

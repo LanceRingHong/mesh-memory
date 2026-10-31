@@ -9,7 +9,7 @@
 ## 分层
 
 ```
-L4 工具层  mesh_status / memory_* / peers / workspaces / run / wait / send / read / interrupt / fetch_file / send_file
+L4 工具层  mesh_status / memory_* / conflicts / peers / workspaces / run / wait / send / read / interrupt / fetch_file / send_file
 L3 编排层  工作区选择、委托、operationId、结果摘要（**没有**内部串行队列）
 L2 记忆层  AGENTS.shared.md、skills/、memory/、sessions/<device>/、index/
 L1 同步层  Syncthing / git / 手工（插件只读写目录）
@@ -36,6 +36,27 @@ DSH-mesh/
 
 - Windows 默认 `~/DSH-mesh`；Android 有 `/sdcard` 时默认 `/sdcard/DSH-mesh`。
 - 也可用 `DSH_MESH_DIR` 或 profile patch 的 `memoryDir` 覆盖。
+
+## 记忆生命周期（0.6.0）
+
+- `mesh_memory_write` → `memory/<kind>/<stamp>-<rand>-<slug>.md`（原子写 + `id`）。
+- `mesh_memory_update` → 就地重写 frontmatter，保留 `id/createdAt/device`，写 `updatedAt`。
+- `mesh_memory_delete` → 软删除到 `.trash/<原相对目录>/<stamp>-<rand>-<原名>.md`；`mesh_memory_restore` 按原路径恢复，目标存在则拒绝。
+- `mesh_conflicts` → 列出 `.sync-conflict-*`；这些文件不进自动召回，但会在树（`conflict:true`）与搜索（`conflict:true`）里可见。
+- 搜索与召回统一用 `store.isDocValid`（supersededBy / validAt / invalidAt）。
+
+## 召回缓存（0.6.0）
+
+- `recall.loadDocs` 先 `readdir + stat` 生成签名（路径 + mtime + size + 上限），签名未变直接复用上次解析结果。
+- 单个文件未变时复用其分块与词频（`Map<term, freq>`），只重读变化的文件；不再每轮对所有文件重新 tokenize。
+- 缓存只存在进程内存，不写共享目录（避免把正文复制进同步目录）。
+
+## 只读页面（0.6.0）
+
+- 回环判断：`socket.remoteAddress` 与 `Host` 同时必须是本机（`export isLoopbackRequest` 供测试）。
+- `/dsh-mesh` 路由依赖 DSH 登录态；独立端口可选 `dashboardToken`（`?token=` 或 `x-dsh-mesh-token`）。
+- 端口被占用时 `listening=false`，`/api/status` 会显示 `dashboardListening`。
+- `GET /api/conflicts` 列出冲突副本。
 
 ## AGENTS 物化
 

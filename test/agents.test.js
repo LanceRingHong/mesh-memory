@@ -10,6 +10,7 @@ import {
   materializeAgents,
   previewAgents,
   previewSkills,
+  syncSkills,
 } from '../src/agents.js'
 
 async function setup(shared = '# Shared\n\n- rule A\n') {
@@ -135,4 +136,19 @@ test('lineDiff 基本行为', () => {
   ])
   assert.deepEqual(lineDiff('', 'x'), [{ op: '+', line: 'x' }])
   assert.deepEqual(lineDiff('same', 'same'), [])
+})
+
+test('skills 超过 maxSkillBytes 时拒绝同步（P2-6）', async (t) => {
+  const { settings, cleanup, memoryDir, dshHome } = await setup()
+  t.after(cleanup)
+  settings.maxSkillBytes = 100
+  await fs.mkdir(path.join(memoryDir, 'skills', 'big'), { recursive: true })
+  await fs.writeFile(path.join(memoryDir, 'skills', 'big', 'SKILL.md'), 'x'.repeat(500), 'utf8')
+
+  const preview = await previewSkills(settings)
+  assert.ok(preview.skip.some((item) => item.name === 'big' && item.reason.includes('maxSkillBytes')))
+
+  const applied = await syncSkills(settings, { force: true })
+  assert.ok(applied.skipped.some((item) => item.includes('too large')))
+  assert.equal(existsSync(path.join(dshHome, 'skills', 'big')), false)
 })

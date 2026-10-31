@@ -2,7 +2,7 @@
 
 > 跨设备共享记忆 + DSH 委托，给 DeepSeek Harness 装上“不会失忆的第二大脑”。
 
-![version](https://img.shields.io/badge/version-0.5.0-blue)
+![version](https://img.shields.io/badge/version-0.6.0-blue)
 ![license](https://img.shields.io/github/license/LanceRingHong/dsh-mesh)
 ![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.x-8a2be2)
 ![Node](https://img.shields.io/badge/Node-%E2%89%A518-3c873a)
@@ -12,7 +12,7 @@
 - 通过 **DSH Remote** 委托另一台设备建会话、执行任务、读结果、传文件。
 - 桌面有侧栏/顶栏入口，DSH Go 有原生记忆页。
 
-> 当前版本 `0.5.0`（信任边界与 Remote 语义版，含行为变更），MIT。DSH Go 原生记忆页的配套 PR：
+> 当前版本 `0.6.0`（记忆生命周期 + 检索一致性 + 可运维性），MIT。DSH Go 原生记忆页的配套 PR：
 > [dsh-go #168](https://github.com/ccch1mneyyy/dsh-Go/pull/168)（Ready for review）。
 
 ---
@@ -58,6 +58,7 @@ DSH 默认每个会话都是新的。`dsh-mesh` 把“该记住的事”写成 M
 | 共享记忆 | `AGENTS.shared.md`、`skills/`、`memory/`、`sessions/` 全部是文件 |
 | 自动召回 | 每轮 BM25 检索，注入 `<dsh-mesh-memory>`；带预算和去重 |
 | 记忆 schema | `description`、`memoryType`、`tags`、`aliases`、`baseline`、`validAt`、`invalidAt`、`supersededBy` |
+| 记忆生命周期 | `mesh_memory_update`、软删除到 `.trash/`、恢复；冲突副本用 `mesh_conflicts` 列出 |
 | 跨设备委托 | `mesh_run` / `mesh_wait` / `mesh_send` / `mesh_read` / `mesh_interrupt` / `mesh_peers` / `mesh_workspaces` |
 | 文件传输 | `mesh_send_file` / `mesh_fetch_file`（受 Remote 工作区与大小限制） |
 | 桌面 UI | 侧栏底部、对话顶部、对话「记忆」标签；完整树 + Markdown 预览 |
@@ -202,6 +203,8 @@ mesh_status
 | `recallMinScore` | `0` | 召回的最低 BM25 绝对分（0 = 只用相对门槛与词项特异性） |
 | `recallMaxChars` | `6000` | 每轮注入召回文本的字符预算 |
 | `allowedUploadRoots` | `[]` → 共享记忆目录 + `~/Downloads` | 允许 `mesh_send_file` 上传的本机目录 |
+| `dashboardToken` | `''` | 独立只读页面的访问 token；留空不校验（仍只绑定 127.0.0.1） |
+| `maxSkillBytes` | `2000000` | 单个共享 skill 目录的大小上限；超限或含符号链接时拒绝同步 |
 
 多设备时每台设备用不同 `deviceName`，避免摘要目录混在一起。
 
@@ -286,9 +289,13 @@ supersededBy: "memory/facts/newer.md"
 | `mesh_run` | 建会话 + 发任务 + 等待 + 读回；`ok` 只在完成时为真 |
 | `mesh_wait` | 等会话完成/审批，返回最新摘要 |
 | `mesh_send` | 向已有会话追加消息（幂等 `operationId`） |
-| `mesh_read` | 读远程会话历史并摘要 |
+| `mesh_read` | 读远程会话历史并摘要（支持 `beforeSeq`/`throughSeq` 分页） |
 | `mesh_interrupt` | 中断远程会话 |
 | `mesh_fetch_file` / `mesh_send_file` | 下载/上传工作区文件（回执须含落盘信息） |
+| `mesh_memory_update` | 就地更新一条记忆（保留 id/createdAt） |
+| `mesh_memory_delete` | 软删除到 `.trash/`（需 `confirm:true`） |
+| `mesh_memory_trash` / `mesh_memory_restore` | 列出回收站 / 按原路径恢复 |
+| `mesh_conflicts` | 列出 Syncthing 冲突副本 |
 
 `mesh_memory_sync` 的两步用法：
 
@@ -308,6 +315,7 @@ GET /dsh-mesh/api/status
 GET /dsh-mesh/api/tree
 GET /dsh-mesh/api/search?q=...
 GET /dsh-mesh/api/file?path=...
+GET /dsh-mesh/api/conflicts
 ```
 
 ## 界面
@@ -384,6 +392,9 @@ http://127.0.0.1:8765/
 - **读取边界**（0.4.6 起）：只读共享目录内的普通文件，拒绝符号链接/目录联接，`realpath` 必须仍在共享目录内，并有单文件大小上限。
 - **上传边界**（0.4.6 起）：`mesh_send_file` 只允许 `allowedUploadRoots` 内的文件，并永久拒绝 `.env`、`id_*`、`*.pem`、`*.key`、`*.jks`、`.ssh/` 等敏感路径。
 - **写入边界**（0.4.6 起）：`mesh_digest` 的 `sessionId` 走白名单；记忆写入用唯一临时文件 + rename，不会同秒覆盖。
+- **记忆生命周期**（0.6.0 起）：删除是软删除（进 `.trash/`，可恢复），更新保留 `id/createdAt`；冲突副本不会被自动召回，但会在树/搜索/`mesh_conflicts` 里显示。
+- **只读页面**（0.6.0 起）：socket 地址与 Host 头双重校验；可选 `dashboardToken`；端口被占用时状态里 `dashboardListening:false`。
+- **桌面客户端**（0.6.0 起）：请求 15s 超时、选中文件不再重复请求、Markdown 输出过 sanitizer。
 - 下载 ≤50 MiB；上传中继 ≤20 MiB、P2P ≤1 GiB；只限工作区。
 - Android `/sdcard` 工作区的 Remote 上传/下载可能失败，优先 `/root/workspace`。
 - `mesh_run` 目标端按自己的权限执行，不会提权；审批由目标端处理。

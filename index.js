@@ -1,6 +1,6 @@
 import Schema from '@deepseek-ai/schemastery'
 import { settingsOf } from './src/config.js'
-import { ensureLayout, publishNativeManifest } from './src/store.js'
+import { ensureLayout, publishNativeManifest, updateDevices } from './src/store.js'
 import { materializeAgents, syncSkills } from './src/agents.js'
 import { registerTools } from './src/tools.js'
 import { registerDashboard } from './src/dashboard.js'
@@ -30,6 +30,8 @@ export const Config = Schema.object({
   allowedUploadRoots: Schema.array(Schema.string())
     .default([])
     .description('允许 mesh_send_file 上传的本机目录；留空时默认共享记忆目录 + 用户 Downloads。'),
+  dashboardToken: Schema.string().default('').description('只读页面访问 token；留空表示不校验（仍只绑定 127.0.0.1）。'),
+  maxSkillBytes: Schema.number().default(2000000).description('单个共享 skill 目录的大小上限（字节）。'),
 })
 
 const SKILL = `# dsh-mesh：跨设备共享记忆与委托
@@ -91,6 +93,7 @@ export function apply(ctx, config = {}) {
   Promise.resolve()
     .then(async () => {
       await ensureLayout(settings)
+      await updateDevices(settings).catch(() => {})
       await publishNativeManifest(settings)
       if (settings.autoSyncAgents) await materializeAgents(settings)
       if (settings.syncSkills) await syncSkills(settings)

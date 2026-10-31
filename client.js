@@ -15,7 +15,7 @@ window.__ModuleLoader__.load({
   factory: (require) => {
     const React = require('react')
     const h = React.createElement
-    const { useEffect, useMemo, useState } = React
+    const { useEffect, useMemo, useRef, useState } = React
 
     let ReactDOM = null
     try {
@@ -103,10 +103,17 @@ window.__ModuleLoader__.load({
     }
 
     async function api(path) {
-      const res = await fetch(API + path, { cache: 'no-store' })
-      const json = await res.json()
-      if (!json.ok) throw new Error(json.error || 'request failed')
-      return json
+      // 超时/取消：避免网络挂起时 UI 永久“读取中”（P2-8）。
+      const controller = typeof AbortController === 'function' ? new AbortController() : null
+      const timer = controller ? setTimeout(() => controller.abort(), 15000) : null
+      try {
+        const res = await fetch(API + path, { cache: 'no-store', signal: controller?.signal })
+        const json = await res.json()
+        if (!json.ok) throw new Error(json.error || 'request failed')
+        return json
+      } finally {
+        if (timer) clearTimeout(timer)
+      }
     }
 
     function fmtSize(n) {
@@ -153,6 +160,18 @@ window.__ModuleLoader__.load({
         .replace(/~~([^~]+)~~/g, '<del>$1</del>')
         .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
         .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
+    }
+
+    /**
+     * 客户端 Markdown 只支持很小的子集，且所有文本先经过 escHtml；
+     * 这里再做一次白名单式清理，避免后续改动引入 XSS（P2-9）。
+     */
+    function sanitizeHtml(html) {
+      return String(html || '')
+        .replace(/<\s*(script|iframe|object|embed|style|link|meta|form)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
+        .replace(/<\s*(script|iframe|object|embed|style|link|meta|form)[^>]*\/?>/gi, '')
+        .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+        .replace(/\s(href|src)\s*=\s*(["'])\s*(javascript|data):[^"']*\2/gi, ' $1="#"')
     }
 
     function renderMarkdown(text) {
@@ -296,7 +315,7 @@ window.__ModuleLoader__.load({
         [
           h('span', { className: 'caret', key: 'c' }, '·'),
           h('span', { className: 'nm', key: 'n' }, labelFor(node)),
-          h('span', { className: 'sz', key: 's' }, fmtSize(node.size)),
+          h('span', { className: 'sz', key: 's' }, node.conflict ? `⚠ 冲突 · ${fmtSize(node.size)}` : fmtSize(node.size)),
         ],
       )
     }
@@ -314,19 +333,28 @@ window.__ModuleLoader__.load({
       const [viewMode, setViewMode] = useState('preview')
 
       const openFile = async (p) => {
-        setSelected(p)
-        setViewMode('preview')
+        // 只负责取内容；选中状态由 selectFile 管，避免 setSelected 触发的重复请求与竞态。
+        const seq = requestSeq.current + 1
+        requestSeq.current = seq
         setBusy(true)
         setError('')
         try {
           const out = await api('/file?path=' + encodeURIComponent(p))
+          if (seq !== requestSeq.current) return
           setContent(out.text || '')
         } catch (e) {
+          if (seq !== requestSeq.current) return
           setContent('')
           setError(String(e?.message || e))
         } finally {
-          setBusy(false)
+          if (seq === requestSeq.current) setBusy(false)
         }
+      }
+
+      const selectFile = (p) => {
+        setSelected(p)
+        setViewMode('preview')
+        openFile(p)
       }
 
       const load = async () => {
@@ -344,14 +372,13 @@ window.__ModuleLoader__.load({
         }
       }
 
+      const requestSeq = useRef(0)
+
       useEffect(() => {
         ensureStyle()
         load()
+        openFile('AGENTS.shared.md')
       }, [])
-
-      useEffect(() => {
-        if (selected) openFile(selected)
-      }, [selected])
 
       const toggle = (p) => {
         setExpanded((prev) => {
@@ -383,7 +410,7 @@ window.__ModuleLoader__.load({
       const counts = status?.counts || {}
       const isMarkdown = /\.(md|markdown)$/i.test(selected)
       const previewHtml = useMemo(
-        () => (isMarkdown && viewMode === 'preview' ? renderMarkdown(content.slice(0, 100000)) : ''),
+        () => (isMarkdown && viewMode === 'preview' ? sanitizeHtml(renderMarkdown(content.slice(0, 100000))) : ''),
         [content, isMarkdown, viewMode],
       )
 
@@ -410,7 +437,9 @@ window.__ModuleLoader__.load({
           Card('事实', counts.facts),
           Card('决策', counts.decisions),
           Card('项目', counts.projects),
+          Card('笔记', counts.notes),
           Card('会话摘要', counts.sessions),
+          Card('冲突', counts.conflicts),
         ]),
 
         h('div', { className: 'dsh-mesh-toolbar', key: 'toolbar' }, [
@@ -431,7 +460,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dsh-mesh-box dsh-mesh-tree', key: 'tree' }, [
             tree.length
               ? tree.map((node) =>
-                  h(TreeNode, { key: node.path, node, depth: 0, expanded, toggle, open: openFile, selected }),
+                  h(TreeNode, { key: node.path, node, depth: 0, expanded, toggle, open: selectFile, selected }),
                 )
               : h('div', { className: 'dsh-mesh-empty' }, '正在读取共享目录…'),
             results
@@ -440,7 +469,7 @@ window.__ModuleLoader__.load({
                   ...results.map((row) =>
                     h(
                       'div',
-                      { className: 'dsh-mesh-result', key: row.path, onClick: () => openFile(row.path) },
+                      { className: 'dsh-mesh-result', key: row.path, onClick: () => selectFile(row.path) },
                       [h('div', { className: 't', key: 't' }, row.path), h('div', { className: 'p', key: 'p' }, row.snippet)],
                     ),
                   ),

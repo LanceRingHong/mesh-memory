@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.6.0 — 2026-10-31
+
+审计整改第三批：记忆生命周期、检索一致性、可运维性、CI。无破坏性行为变更（除新增确认参数）。
+
+### 记忆生命周期
+
+- 新增 `mesh_memory_update`：就地改标题/描述/正文/tags/aliases/baseline/有效期，保留 `id`/`createdAt`/`device`，写 `updatedAt`。
+- 新增 `mesh_memory_delete`：**软删除**到 `.trash/`（保留原目录结构，必须 `confirm:true`）。
+- 新增 `mesh_memory_trash` / `mesh_memory_restore`：列出回收站、按原路径恢复，目标已存在时拒绝覆盖。
+- 新增 `mesh_conflicts`：列出 Syncthing 冲突副本，供人工裁决。
+
+### 检索一致性
+
+- 搜索与自动召回共用 `isDocValid`：失效/被取代的条目不再出现在搜索结果里。
+- 搜索结果覆盖 `skills/`，并带 `title` 与 `conflict` 标记。
+- 召回新增文档缓存：签名 = 路径+mtime+size+上限；命中时连文件都不读，只重读变化的文件，并复用预计算的词频（不再每轮重新 tokenize）。
+
+### 可观测 / 边界
+
+- 树：冲突文件标 `conflict:true`；`.mesh`/`.stversions`/`.trash` 只显示目录节点、不暴露内部文件；超过 300 项返回 `truncated:true`（native manifest 同步带该标记）。
+- 设备注册表由插件维护（`index/devices.json`，10 分钟内不重复写）。
+- dashboard：回环判断改为 **socket 地址 + Host 头双重校验**（Host 可伪造，socket 不行）；独立页面支持可选 `dashboardToken`；新增 `/api/conflicts`；状态里带 `dashboardListening`/`tokenRequired`。
+- 客户端：修掉选中文件时的重复请求与竞态（请求序号 + 单独的 `selectFile`）；`api()` 加 15s 超时；Markdown 输出加 sanitizer 兜底。
+- 工具错误统一为 `{ ok:false, tool, error }`，不再出现“有的抛错、有的返回 ok:false”。
+
+### Remote
+
+- `mesh_read` 支持 `beforeSeq`/`throughSeq` 分页，返回 `nextCursor`。
+- 会话摘要超长时标记 `truncated` 与 `messageCount`，不再让“部分历史”看起来像全部。
+
+### 工程
+
+- GitHub Actions：Node 20/22/24 × Ubuntu/Windows，跑 `npm run check` + `npm test`。
+- 测试 54 例（51 通过 / 3 跳过）。
+- `maxSkillBytes`：共享 skill 超过上限或含符号链接时拒绝同步。
+
 ## 0.5.0 — 2026-10-31
 
 审计整改第二批：信任边界与 Remote 语义。**含行为变更，升级前先看第一节。**

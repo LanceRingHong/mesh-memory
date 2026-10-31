@@ -10,6 +10,12 @@ import {
   publishNativeManifest,
   sessionsFile,
   writeFileAtomic,
+  updateNote,
+  trashNote,
+  listTrash,
+  restoreTrash,
+  listConflicts,
+  updateDevices,
 } from './store.js'
 import { materializeAgents, previewAgents, previewSkills, syncSkills } from './agents.js'
 import { resolveUploadPath } from './policy.js'
@@ -96,7 +102,25 @@ function clampInt(value, min, max, fallback) {
 
 export function registerTools(ctx, settings) {
   const disposers = []
-  const add = (definition) => disposers.push(ctx.tools.register(defineTool({ output: TEXT_OUTPUT, ...definition })))
+  // 统一错误形状（P3）：任何工具抛错都变成 { ok:false, error, tool }，不再让调用方猜。
+  const add = (definition) => {
+    const run = definition.execute
+    disposers.push(
+      ctx.tools.register(
+        defineTool({
+          ...definition,
+          output: TEXT_OUTPUT,
+          async execute(args, exec) {
+            try {
+              return await run(args, exec)
+            } catch (error) {
+              return json({ ok: false, tool: definition.name, error: String(error?.message || error) })
+            }
+          },
+        }),
+      ),
+    )
+  }
 
   add({
     name: 'mesh_status',
@@ -104,13 +128,14 @@ export function registerTools(ctx, settings) {
     parameters: {},
     async execute() {
       await ensureLayout(settings)
-      const c = await counts(settings)
+      const [c, devices] = await Promise.all([counts(settings), updateDevices(settings)])
       return json({
         device: settings.deviceName,
         deviceSlug: settings.deviceSlug,
         memoryDir: settings.memoryDir,
         dshHome: settings.dshHome,
         counts: c,
+        devices: devices.map((item) => item.name || item.deviceSlug),
         remoteTools: Boolean(ctx.tools.get('remote_list_hosts')),
         autoSyncAgents: settings.autoSyncAgents,
         syncSkills: settings.syncSkills,
@@ -188,6 +213,91 @@ export function registerTools(ctx, settings) {
       await ensureLayout(settings)
       const text = await readMemory(settings, args.path)
       return text.length > 20000 ? `${text.slice(0, 20000)}\n\n…（已截断）` : text
+    },
+  })
+
+  add({
+    name: 'mesh_memory_update',
+    description: '就地更新一条记忆（保留 id/createdAt/device，写入 updatedAt）。只允许 memory/<kind>/<file>.md。',
+    parameters: {
+      path: str('相对 memoryDir 的路径，如 memory/facts/x.md', { required: true }),
+      content: str('新正文（Markdown）；不传则保留原正文'),
+      title: str('新标题'),
+      description: str('新的一句话描述'),
+      tags: { type: 'array', items: { type: 'string' }, description: '新标签（整体替换）' },
+      aliases: { type: 'array', items: { type: 'string' }, description: '新别名（整体替换）' },
+      baseline: { type: 'boolean', description: '是否每场开场注入' },
+      baselinePriority: num('baseline 排序，越大越前'),
+      validAt: str('从何时成立（ISO 时间）'),
+      invalidAt: str('从何时失效（ISO 时间）'),
+      supersededBy: str('现行口径所在文件'),
+    },
+    async execute(args) {
+      await ensureLayout(settings)
+      const patch = {}
+      for (const key of [
+        'content', 'title', 'description', 'tags', 'aliases', 'baseline',
+        'baselinePriority', 'validAt', 'invalidAt', 'supersededBy',
+      ]) {
+        if (args[key] !== undefined) patch[key] = args[key]
+      }
+      const result = await updateNote(settings, args.path, patch)
+      return json({ ok: true, ...result })
+    },
+  })
+
+  add({
+    name: 'mesh_memory_delete',
+    description: '把一条记忆移入 .trash/（软删除，可恢复）。必须显式 confirm:true。',
+    parameters: {
+      path: str('相对 memoryDir 的路径', { required: true }),
+      confirm: bool('必须为 true：表示确认移入回收站（不物理删除）'),
+    },
+    async execute(args) {
+      if (args.confirm !== true) throw new Error('删除需要 confirm:true（这是软删除，文件会进 .trash/）')
+      await ensureLayout(settings)
+      const result = await trashNote(settings, args.path)
+      return json({ ok: true, ...result, hint: '已移入回收站，可用 mesh_memory_restore 恢复。' })
+    },
+  })
+
+  add({
+    name: 'mesh_memory_trash',
+    description: '列出回收站（.trash/）里的记忆，用于恢复或确认删除范围。',
+    parameters: {},
+    async execute() {
+      await ensureLayout(settings)
+      const items = await listTrash(settings)
+      return json({ ok: true, count: items.length, items })
+    },
+  })
+
+  add({
+    name: 'mesh_memory_restore',
+    description: '把回收站里的文件恢复到原路径；目标已存在时拒绝覆盖。',
+    parameters: { path: str('.trash/ 下的相对路径（来自 mesh_memory_trash）', { required: true }) },
+    async execute(args) {
+      await ensureLayout(settings)
+      const result = await restoreTrash(settings, args.path)
+      return json({ ok: true, ...result })
+    },
+  })
+
+  add({
+    name: 'mesh_conflicts',
+    description: '列出共享目录里的 Syncthing 冲突副本（.sync-conflict-*），用于人工裁决。',
+    parameters: {},
+    async execute() {
+      await ensureLayout(settings)
+      const items = await listConflicts(settings)
+      return json({
+        ok: true,
+        count: items.length,
+        items,
+        hint: items.length
+          ? '冲突文件不会进入自动召回；用 mesh_memory_read 查看内容后再决定保留哪个（可用 mesh_memory_update/mesh_memory_delete 处理）。'
+          : '没有冲突副本。',
+      })
     },
   })
 
@@ -423,14 +533,24 @@ export function registerTools(ctx, settings) {
       workspaceId: str('工作区 id', { required: true }),
       sessionId: str('会话 id', { required: true }),
       maxMessages: num('最多消息数，默认 20（1-50）'),
+      beforeSeq: num('只读取该序号之前的历史（可选，用于分页）'),
+      throughSeq: num('读到该序号为止（可选，用于分页）'),
     },
     async execute(args, exec) {
       await ensureLayout(settings)
+      const cursor =
+        Number.isFinite(Number(args.beforeSeq)) || Number.isFinite(Number(args.throughSeq))
+          ? {
+              ...(Number.isFinite(Number(args.beforeSeq)) ? { beforeSeq: Number(args.beforeSeq) } : {}),
+              ...(Number.isFinite(Number(args.throughSeq)) ? { throughSeq: Number(args.throughSeq) } : {}),
+            }
+          : undefined
       const result = await readSession(ctx, exec, {
         hostId: args.hostId,
         workspaceId: args.workspaceId,
         sessionId: args.sessionId,
         maxMessages: clampInt(args.maxMessages, 1, 50, 20),
+        cursor,
       })
       return json({ ok: true, ...result })
     },

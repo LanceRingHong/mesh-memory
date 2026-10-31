@@ -1,5 +1,14 @@
 import http from 'node:http'
-import { ensureLayout, counts, searchMemory, readMemory, recentFiles, treeMemory } from './store.js'
+import {
+  ensureLayout,
+  counts,
+  searchMemory,
+  readMemory,
+  recentFiles,
+  treeMemory,
+  listConflicts,
+  updateDevices,
+} from './store.js'
 
 const HTML = `<!doctype html>
 <html lang="zh-CN">
@@ -124,29 +133,35 @@ function writeJson(res, status, body) {
   writeText(res, status, 'application/json', JSON.stringify(body))
 }
 
-function loopbackFence(req) {
-  const host = req.headers.host
-  if (typeof host !== 'string') return false
+/**
+ * 回环判断（P2-7）：Host 头可以伪造，socket 地址不行——两者都必须指向本机。
+ * 导出给测试用。
+ */
+export function isLoopbackRequest(req) {
+  const socket = req?.socket?.remoteAddress || req?.connection?.remoteAddress || ''
+  const bare = String(socket).replace(/^::ffff:/, '')
+  const socketLoopback = bare === '127.0.0.1' || bare === '::1' || bare === 'localhost'
+  if (!socketLoopback) return false
+  const host = req?.headers?.host
+  if (typeof host !== 'string' || !host) return false
   const name = host.startsWith('[') ? host.slice(1, host.indexOf(']')) : host.split(':')[0]
   return name === '127.0.0.1' || name === 'localhost' || name === '::1'
 }
 
-async function readDevices(settings) {
-  try {
-    const raw = await readMemory(settings, 'index/devices.json')
-    const data = JSON.parse(raw)
-    return Array.isArray(data.devices) ? data.devices : []
-  } catch {
-    return []
-  }
+function tokenOk(req, url, settings) {
+  const expected = String(settings.dashboardToken || '')
+  if (!expected) return true
+  const given = url.searchParams.get('token') || req.headers['x-dsh-mesh-token']
+  return String(given || '') === expected
 }
 
 export function registerDashboard(ctx, settings) {
   let dispose = () => {}
+  let listening = false
   ctx.inject(['webServer'], (sub) => {
-    const handler = async (req, res) => {
-      if (!loopbackFence(req)) {
-        writeJson(res, 403, { ok: false, error: 'non-loopback Host header' })
+    const buildHandler = (requireToken) => async (req, res) => {
+      if (!isLoopbackRequest(req)) {
+        writeJson(res, 403, { ok: false, error: 'non-loopback request' })
         return
       }
       if (req.method !== 'GET') {
@@ -154,6 +169,10 @@ export function registerDashboard(ctx, settings) {
         return
       }
       const url = new URL(req.url || '/', 'http://dsh.internal')
+      if (requireToken && !tokenOk(req, url, settings)) {
+        writeJson(res, 401, { ok: false, error: 'dashboard token required' })
+        return
+      }
       const pathname = url.pathname
       try {
         if (pathname === '/' || pathname === '/dsh-mesh' || pathname === '/dsh-mesh/') {
@@ -162,7 +181,7 @@ export function registerDashboard(ctx, settings) {
         }
         if (pathname === '/dsh-mesh/api/status') {
           await ensureLayout(settings)
-          const [c, devices] = await Promise.all([counts(settings), readDevices(settings)])
+          const [c, devices] = await Promise.all([counts(settings), updateDevices(settings).catch(() => [])])
           const [recentFacts, recentSessions] = await Promise.all([
             recentFiles(settings, 'memory/facts', 10),
             recentFiles(settings, 'sessions', 10),
@@ -178,7 +197,15 @@ export function registerDashboard(ctx, settings) {
             recentFacts,
             recentSessions,
             loopbackOnly: true,
+            dashboardListening: listening,
+            tokenRequired: Boolean(settings.dashboardToken),
           })
+          return
+        }
+        if (pathname === '/dsh-mesh/api/conflicts') {
+          await ensureLayout(settings)
+          const items = await listConflicts(settings)
+          writeJson(res, 200, { ok: true, count: items.length, items })
           return
         }
         if (pathname === '/dsh-mesh/api/search') {
@@ -204,14 +231,19 @@ export function registerDashboard(ctx, settings) {
         writeJson(res, 500, { ok: false, error: String(error?.message || error) })
       }
     }
-    const off = sub.webServer.register({ kind: 'prefix', path: '/dsh-mesh', handler })
+    // /dsh-mesh 路由本身受 DSH 登录保护，不额外要求 token；独立端口需要 token（若配置）。
+    const routeHandler = buildHandler(false)
+    const handler = buildHandler(true)
+    const off = sub.webServer.register({ kind: 'prefix', path: '/dsh-mesh', handler: routeHandler })
     let server = null
     try {
       server = http.createServer(handler)
       server.on('error', (error) => {
+        listening = false
         console.warn(`[dsh-mesh] dashboard port ${settings.dashboardPort} failed: ${error?.message || error}`)
       })
       server.listen(settings.dashboardPort, '127.0.0.1', () => {
+        listening = true
         console.info(`[dsh-mesh] dashboard at http://127.0.0.1:${settings.dashboardPort}/`)
       })
     } catch (error) {

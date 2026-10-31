@@ -301,9 +301,13 @@ export function summarizeSession(raw) {
   return {
     status: data.status,
     title,
-    messages,
+    messages: messages.slice(-200),
     approvals,
     lastSeq: data.nextCursor?.throughSeq ?? null,
+    nextCursor: data.nextCursor ?? null,
+    messageCount: messages.length,
+    // 明确标记截断，避免把“只读到一部分”当成完整历史（P2-12）。
+    truncated: messages.length > 200 || text.length >= 6000,
     text,
   }
 }
@@ -401,13 +405,14 @@ export async function runOnHost(ctx, exec, { hostId, workspaceId, workspacePath,
   }
 }
 
-export async function readSession(ctx, exec, { hostId, workspaceId, sessionId, maxMessages = 20 }) {
+export async function readSession(ctx, exec, { hostId, workspaceId, sessionId, maxMessages = 20, cursor }) {
   const raw = await callRemote(ctx, exec, 'remote_read_session', {
     hostId,
     backend: 'harness',
     workspaceId,
     sessionId,
     maxMessages: Math.min(50, Math.max(1, Number(maxMessages) || 20)),
+    ...(cursor && typeof cursor === 'object' ? { cursor } : {}),
   })
   return summarizeSession(raw)
 }
