@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.0 — 2026-11-01
+
+独立页面（8765）升级为移动适配的完整 GUI，Go 本机可用浏览器直接操作。
+
+- 三段式：待确认（接受/忽略/立即整理）、记忆（搜索/分组列表/新建/编辑/软删除）、备份（立即快照/历史/恢复）。
+- 手机/平板布局：列表与详情在窄屏切换（返回按钮），宽屏两栏；安全区适配。
+- 复用 0.8.0 写接口；token 通过 `?token=` 或 `x-dsh-mesh-token`，写操作仍要求 `x-dsh-mesh-action` + 同源。
+- 平板热升级验证：页面 20.9 KB，`id="tabs"`/`acceptKind` 均在；status facts 14 / inbox 1。
+- 说明：Go 的 `ui.json` 只允许 `https://` 的 link action，无法直接配 `http://127.0.0.1:8765`；Go 端优先走 `conversation.view` 的 island（已确认 `plugins.seats["conversation.view"]["dsh-mesh"]="island"`）。
 ## 0.8.2 — 2026-11-01
 
 界面可用性修复（0.8.0 的布局 bug）。
@@ -246,4 +255,5 @@
 ## 0.1.0 — 2026-10-31
 
 - Initial MVP: shared memory, 13 `mesh_*` tools, Remote delegation, file transfer.
+
 

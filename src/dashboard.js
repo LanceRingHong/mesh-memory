@@ -21,120 +21,374 @@ const HTML = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DSH Mesh 记忆</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>dsh-mesh 记忆</title>
 <style>
-:root{--bg:#0f1115;--panel:#171a21;--panel2:#1e222b;--text:#e7eaf0;--muted:#8b93a5;--line:#2a303c;--accent:#6ee7b7;--accent2:#93c5fd;--warn:#fbbf24}
-@media(prefers-color-scheme:light){:root{--bg:#f5f7fb;--panel:#fff;--panel2:#eef2f8;--text:#172033;--muted:#5b6475;--line:#dfe5ef;--accent:#0f766e;--accent2:#1d4ed8;--warn:#b45309}}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}
-.wrap{max-width:1120px;margin:0 auto;padding:22px 16px 48px}
-header{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;margin-bottom:18px}
-h1{font-size:22px;margin:0;letter-spacing:.2px}
-.sub{color:var(--muted);font-size:12px;margin-top:4px}
-button{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:9px;padding:8px 12px;cursor:pointer;font:inherit}
-button:hover{border-color:var(--accent)}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
-.card .n{font-size:24px;font-weight:700;color:var(--accent)}
-.card .l{font-size:11px;color:var(--muted);margin-top:2px}
-.grid{display:grid;grid-template-columns:1.15fr .85fr;gap:14px}
-@media(max-width:820px){.grid{grid-template-columns:1fr}}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
-.panel h2{font-size:13px;margin:0 0 10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.08em}
-.search{display:flex;gap:8px;margin-bottom:12px}
-.search input{flex:1;background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:9px;padding:9px 11px;font:inherit;outline:none}
-.search input:focus{border-color:var(--accent2)}
-.list{display:flex;flex-direction:column;gap:6px;max-height:420px;overflow:auto}
-.item{background:var(--panel2);border:1px solid transparent;border-radius:9px;padding:9px 10px;cursor:pointer}
-.item:hover{border-color:var(--line)}
-.item .t{font-weight:600;font-size:13px}
-.item .p{color:var(--muted);font-size:11px;word-break:break-all;margin-top:2px}
-.empty{color:var(--muted);font-size:12px;padding:10px 0}
-.pill{display:inline-block;background:var(--panel2);border:1px solid var(--line);border-radius:999px;padding:2px 8px;font-size:11px;color:var(--muted);margin:2px 4px 2px 0}
-pre{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:12px;white-space:pre-wrap;word-break:break-word;max-height:460px;overflow:auto;font:12px/1.5 ui-monospace,Consolas,monospace}
-.hint{color:var(--muted);font-size:11px}
-.hit{border-left:2px solid var(--accent2)}
-.err{color:var(--warn);font-size:12px}
+  :root{--bg:#12151c;--panel:#191d26;--panel2:#1f2430;--line:#2b3240;--fg:#e8ebf2;--muted:#98a2b3;--accent:#6ee7b7;--danger:#f87171}
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;display:flex;flex-direction:column;padding:calc(10px + env(safe-area-inset-top)) 14px calc(10px + env(safe-area-inset-bottom))}
+  header{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;padding:2px 0 12px}
+  h1{font-size:24px;margin:0;letter-spacing:.3px}
+  .sub{color:var(--muted);font-size:12px;margin-top:4px;flex:1;min-width:0}
+  button{font:inherit;color:inherit;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 13px;cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#08110c;font-weight:600}
+  button.sm{padding:5px 10px;font-size:13px;border-radius:9px}
+  button.danger{color:var(--danger);border-color:#5b2b31}
+  button:disabled{opacity:.45}
+  .tabs{display:flex;gap:8px;padding:0 0 12px;flex-wrap:wrap}
+  .tab{padding:8px 16px;border-radius:999px;background:transparent;border:1px solid var(--line);font-size:14px}
+  .tab.on{background:var(--accent);border-color:var(--accent);color:#08110c;font-weight:600}
+  .tab .n{opacity:.7;margin-left:5px;font-size:12px}
+  main{flex:1;min-height:0;display:flex;flex-direction:column}
+  .pane{display:none;flex:1;min-height:0;flex-direction:column;gap:10px}
+  .pane.on{display:flex}
+  .split{display:flex;gap:12px;flex:1;min-height:0}
+  .list{flex:0 0 38%;min-width:0;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px}
+  .detail{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px;min-height:0}
+  .group{font-size:12px;color:var(--muted);padding:10px 6px 6px;letter-spacing:.4px}
+  .item{border:1px solid var(--line);background:var(--panel2);border-radius:11px;padding:10px 12px;margin-bottom:7px;cursor:pointer}
+  .item:hover{border-color:var(--accent)}
+  .item.sel{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+  .item .t{font-size:14px;font-weight:600;word-break:break-word}
+  .item .m{font-size:11.5px;color:var(--muted);margin-top:3px;word-break:break-all}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .head{display:flex;gap:8px;align-items:center;justify-content:space-between;padding-bottom:10px;border-bottom:1px solid var(--line);margin-bottom:10px;flex:none}
+  .path{font:12px/1.5 ui-monospace,Consolas,monospace;color:var(--muted);word-break:break-all;flex:1;min-width:0}
+  .md{flex:1;min-height:0;overflow:auto;font-size:15px;line-height:1.75;word-break:break-word}
+  .md h1{font-size:23px;margin:.6em 0 .4em;padding-bottom:6px;border-bottom:1px solid var(--line)}
+  .md h2{font-size:19px;margin:1em 0 .4em;padding-bottom:4px;border-bottom:1px solid var(--line)}
+  .md h3{font-size:17px;margin:.9em 0 .3em}
+  .md p{margin:.5em 0}.md ul,.md ol{margin:.4em 0;padding-left:1.4em}
+  .md code{background:#252b37;border-radius:5px;padding:1px 5px;font:13px ui-monospace,Consolas,monospace}
+  .md pre{background:#0f1319;border:1px solid var(--line);border-radius:10px;padding:11px;overflow:auto}
+  .md pre code{background:transparent;padding:0}
+  .md blockquote{margin:.6em 0;padding:.3em .9em;border-left:3px solid var(--accent);background:var(--panel2);border-radius:0 8px 8px 0;color:var(--muted)}
+  .md a{color:#93c5fd}.md hr{border:0;border-top:1px solid var(--line);margin:1em 0}
+  .empty{color:var(--muted);text-align:center;padding:26px 10px;font-size:13px}
+  textarea,input,select{font:inherit;color:inherit;background:#10141a;border:1px solid var(--line);border-radius:10px;padding:10px;outline:none;width:100%}
+  textarea{min-height:170px;resize:vertical;font:13.5px/1.6 ui-monospace,Consolas,monospace}
+  input:focus,textarea:focus,select:focus{border-color:var(--accent)}
+  .form{display:flex;flex-direction:column;gap:9px}
+  .toast{position:fixed;left:50%;bottom:calc(18px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#202636;border:1px solid var(--accent);border-radius:10px;padding:9px 15px;font-size:13.5px;box-shadow:0 10px 30px rgba(0,0,0,.45);display:none;z-index:20;max-width:90vw}
+  .toast.on{display:block}
+  .back{display:none}
+  @media(max-width:760px){
+    body{padding-left:10px;padding-right:10px}
+    h1{font-size:21px}
+    .split{display:block;position:relative}
+    .list{height:100%;flex:none}
+    .detail{display:none;position:absolute;inset:0;z-index:5}
+    .detail.show{display:flex}
+    .back{display:inline-block}
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
 <header>
-  <div>
-    <h1>DSH Mesh 记忆</h1>
+  <div style="flex:1;min-width:0">
+    <h1>记忆</h1>
     <div class="sub" id="sub">加载中…</div>
   </div>
-  <div>
-    <button id="refresh">刷新</button>
-    <button id="agents">AGENTS.shared.md</button>
-  </div>
+  <button id="refresh" class="sm">刷新</button>
 </header>
-<div class="cards" id="cards"></div>
-<div class="grid">
-  <div class="panel">
-    <h2>搜索共享记忆</h2>
-    <div class="search"><input id="q" placeholder="关键词，空格分隔；回车搜索"><button id="go">搜索</button></div>
-    <div class="list" id="results"><div class="empty">输入关键词开始搜索。</div></div>
-    <h2 style="margin-top:16px">最近事实 / 决策</h2>
-    <div class="list" id="recent"></div>
-  </div>
-  <div class="panel">
-    <h2>内容</h2>
-    <pre id="view">点击左侧条目查看内容。</pre>
-    <div class="hint" id="viewPath"></div>
-    <h2 style="margin-top:16px">设备</h2>
-    <div id="devices"></div>
-    <h2 style="margin-top:16px">待确认记忆</h2>
-    <div class="list" id="inbox"><div class="empty">加载中…</div></div>
-  </div>
+
+<div class="tabs" id="tabs">
+  <button class="tab on" data-tab="inbox">待确认<span class="n" id="n-inbox"></span></button>
+  <button class="tab" data-tab="memory">记忆</button>
+  <button class="tab" data-tab="backup">备份</button>
 </div>
-</div>
+
+<main>
+  <section class="pane on" id="pane-inbox">
+    <div class="split">
+      <div class="list" id="inboxList"></div>
+      <div class="detail" id="inboxDetail">
+        <div class="head">
+          <button class="sm back" data-back="inbox">‹ 返回</button>
+          <div class="path" id="inboxPath">选择左侧条目</div>
+          <div class="row" id="inboxActions" style="display:none">
+            <select id="acceptKind" style="width:auto">
+              <option value="notes">笔记</option>
+              <option value="facts">事实</option>
+              <option value="decisions">决策</option>
+              <option value="projects">项目</option>
+            </select>
+            <button class="sm primary" id="acceptBtn">接受</button>
+            <button class="sm" id="rejectBtn">忽略</button>
+          </div>
+        </div>
+        <div class="md" id="inboxMd"><div class="empty">待确认列表为空时，这里会显示摘要。</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="pane" id="pane-memory">
+    <div class="row" style="flex:none">
+      <input id="search" placeholder="搜索共享记忆…" style="flex:1;min-width:120px">
+      <button class="sm" id="searchBtn">搜索</button>
+      <button class="sm primary" id="newBtn">新建</button>
+    </div>
+    <div class="split">
+      <div class="list" id="memList"></div>
+      <div class="detail" id="memDetail">
+        <div class="head">
+          <button class="sm back" data-back="memory">‹ 返回</button>
+          <div class="path" id="memPath">选择文件</div>
+          <div class="row" id="memActions"></div>
+        </div>
+        <div class="md" id="memMd"><div class="empty">从左侧选择一条记忆查看内容。</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="pane" id="pane-backup">
+    <div class="row" style="flex:none">
+      <button class="sm primary" id="snapBtn">立即快照</button>
+      <span class="sub" style="margin:0">git 目录在 $DSH_HOME，不参与同步</span>
+    </div>
+    <div class="list" id="backupList" style="flex:1"></div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
 <script>
-const $=(s)=>document.querySelector(s);
-const esc=(s)=>String(s??'').replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-async function api(p){const r=await fetch(p,{cache:'no-store'});const j=await r.json();if(!j.ok)throw new Error(j.error||'request failed');return j;}
-function item(row,kind){const d=document.createElement('div');d.className='item';d.dataset.path=row.path;d.innerHTML='<div class="t">'+esc(row.title||row.path)+'</div><div class="p">'+esc(kind?kind+' · ':'')+esc(row.path)+'</div>';d.onclick=()=>openFile(row.path);return d;}
-async function openFile(p){try{const j=await api('/dsh-mesh/api/file?path='+encodeURIComponent(p));$('#view').textContent=j.text;$('#viewPath').textContent=p;}catch(e){$('#view').textContent='读取失败：'+e.message;}}
-async function openInboxFile(p){try{const j=await api('/dsh-mesh/api/inbox/file?path='+encodeURIComponent(p));$('#view').textContent=j.text;$('#viewPath').textContent=p;}catch(e){$('#view').textContent='读取失败：'+e.message;}}
-async function load(){
-  try{
-    const j=await api('/dsh-mesh/api/status');
-    $('#sub').textContent=j.device+' · '+j.memoryDir+(j.loopbackOnly?' · 仅本机':'');
-    const c=j.counts||{};
-    const cards=[['事实',c.facts],['决策',c.decisions],['项目',c.projects],['笔记',c.notes],['会话摘要',c.sessions],['待确认',c.inbox]];
-    $('#cards').innerHTML=cards.map(([l,n])=>'<div class="card"><div class="n">'+(n??0)+'</div><div class="l">'+l+'</div></div>').join('');
-    $('#recent').innerHTML='';
-    const rows=[...(j.recentFacts||[]),...(j.recentSessions||[])];
-    if(!rows.length)$('#recent').innerHTML='<div class="empty">还没有记忆条目。</div>';
-    rows.forEach((r)=>$('#recent').appendChild(item(r)));
-    $('#devices').innerHTML=(j.devices||[]).length?(j.devices.map((d)=>'<span class="pill">'+esc(d.name||d.deviceSlug||d.deviceId||'device')+'</span>').join('')):'<div class="empty">index/devices.json 为空；配对设备后由插件维护。</div>';
-    try{
-      const ib=await api('/dsh-mesh/api/inbox');
-      $('#inbox').innerHTML='';
-      if(!ib.items.length){$('#inbox').innerHTML='<div class="empty">没有待确认的自动记录。会话结束或空闲后会出现。</div>';}
-      ib.items.slice(0,10).forEach((r)=>{const d=document.createElement('div');d.className='item';d.innerHTML='<div class="t">'+esc(r.title||r.path)+'</div><div class="p">'+esc(r.updatedAt||r.createdAt||'')+' · '+esc(r.turns)+' 轮</div>';d.onclick=()=>openInboxFile(r.path);$('#inbox').appendChild(d);});
-    }catch(e){$('#inbox').innerHTML='<div class="empty">读取失败：'+esc(e.message)+'</div>';}
-  }catch(e){$('#sub').textContent='加载失败：'+e.message;}
+var TOKEN = new URLSearchParams(location.search).get('token') || localStorage.getItem('dshMeshToken') || ''
+if (new URLSearchParams(location.search).get('token')) localStorage.setItem('dshMeshToken', TOKEN)
+var state = { status: null, inbox: [], files: [], backups: [], tab: 'inbox', draft: '', draftPath: '', file: '', fileText: '', groups: {}, editing: false, creating: false }
+
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] }) }
+function toast(msg) { var el = document.getElementById('toast'); el.textContent = msg; el.classList.add('on'); clearTimeout(toast._t); toast._t = setTimeout(function () { el.classList.remove('on') }, 2600) }
+function $(id) { return document.getElementById(id) }
+
+function inline(s) {
+  return esc(s)
+    .replace(/\x60([^\x60]+)\x60/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
 }
-async function search(){
-  const q=$('#q').value.trim();if(!q)return;
-  $('#results').innerHTML='<div class="empty">搜索中…</div>';
-  try{
-    const j=await api('/dsh-mesh/api/search?q='+encodeURIComponent(q));
-    $('#results').innerHTML='';
-    if(!j.results.length)$('#results').innerHTML='<div class="empty">没有命中。</div>';
-    j.results.forEach((r)=>{const d=item(r,'hit');d.classList.add('hit');$('#results').appendChild(d);});
-  }catch(e){$('#results').innerHTML='<div class="err">'+esc(e.message)+'</div>';}
+function md(text) {
+  var lines = String(text || '').split('\n'), html = '', inCode = false, inList = false
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i]
+    if (/^\s*\x60\x60\x60/.test(line)) { html += inCode ? '</code></pre>' : '<pre><code>'; inCode = !inCode; continue }
+    if (inCode) { html += esc(line) + '\n'; continue }
+    var h = line.match(/^(#{1,4})\s+(.*)$/)
+    if (h) { var n = h[1].length; html += '<h' + n + '>' + inline(h[2]) + '</h' + n + '>'; continue }
+    if (/^\s*[-*]\s+/.test(line)) { if (!inList) { html += '<ul>'; inList = true } html += '<li>' + inline(line.replace(/^\s*[-*]\s+/, '')) + '</li>'; continue }
+    if (inList) { html += '</ul>'; inList = false }
+    if (/^>\s?/.test(line)) { html += '<blockquote>' + inline(line.replace(/^>\s?/, '')) + '</blockquote>'; continue }
+    if (/^---+$/.test(line.trim())) { html += '<hr>'; continue }
+    if (line.trim()) html += '<p>' + inline(line) + '</p>'
+  }
+  if (inList) html += '</ul>'
+  if (inCode) html += '</code></pre>'
+  return html || '<div class="empty">（空）</div>'
 }
-$('#refresh').onclick=load;
-$('#agents').onclick=()=>openFile('AGENTS.shared.md');
-$('#go').onclick=search;
-$('#q').addEventListener('keydown',(e)=>{if(e.key==='Enter')search();});
-load();
+
+function api(path, opts) {
+  opts = opts || {}
+  var headers = Object.assign({}, opts.headers || {})
+  if (TOKEN) headers['x-dsh-mesh-token'] = TOKEN
+  return fetch('/dsh-mesh/api' + path, Object.assign({ cache: 'no-store' }, opts, { headers: headers })).then(function (res) {
+    return res.json().then(function (json) { if (!json.ok) throw new Error(json.error || ('HTTP ' + res.status)); return json })
+  })
+}
+function post(path, body) {
+  return api(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-dsh-mesh-action': '1' }, body: JSON.stringify(body || {}) })
+}
+
+function flatten(nodes, prefix) {
+  var out = []
+  ;(nodes || []).forEach(function (node) {
+    var p = prefix ? prefix + '/' + node.name : node.name
+    if (node.type === 'dir') out = out.concat(flatten(node.children || [], p))
+    else out.push(p)
+  })
+  return out
+}
+function titleOf(p) {
+  var base = p.split('/').pop().replace(/\.md$/i, '')
+  var cut = base.replace(/^\d{8}-\d{6}(-[0-9a-f]{6})?-/, '')
+  return cut || base
+}
+function groupOf(p) {
+  if (p === 'AGENTS.shared.md') return '共享规则'
+  if (p.indexOf('skills/') === 0) return '技能'
+  if (p.indexOf('memory/facts') === 0) return '事实'
+  if (p.indexOf('memory/decisions') === 0) return '决策'
+  if (p.indexOf('memory/projects') === 0) return '项目'
+  if (p.indexOf('memory/notes') === 0) return '笔记'
+  if (p.indexOf('sessions/') === 0) return '会话摘要'
+  return '其他'
+}
+var GROUP_ORDER = ['共享规则', '技能', '事实', '决策', '项目', '笔记', '会话摘要', '其他']
+
+function setTab(tab) {
+  state.tab = tab
+  var tabs = document.querySelectorAll('.tab')
+  for (var i = 0; i < tabs.length; i++) tabs[i].classList.toggle('on', tabs[i].getAttribute('data-tab') === tab)
+  var panes = document.querySelectorAll('.pane')
+  for (var j = 0; j < panes.length; j++) panes[j].classList.toggle('on', panes[j].id === 'pane-' + tab)
+}
+function openDetail(which) { var el = $(which === 'inbox' ? 'inboxDetail' : 'memDetail'); if (el) el.classList.add('show') }
+function closeDetail(which) { var el = $(which === 'inbox' ? 'inboxDetail' : 'memDetail'); if (el) el.classList.remove('show') }
+
+function load() {
+  return Promise.all([api('/status'), api('/tree'), api('/inbox'), api('/backup')]).then(function (out) {
+    state.status = out[0]; state.inbox = out[2].items || []; state.backups = out[3].items || []; state.files = flatten(out[1].root || [], '')
+    var c = state.status.counts || {}
+    $('sub').textContent = (state.status.device || 'device') + ' · ' + (c.facts || 0) + ' 事实 · ' + (c.notes || 0) + ' 笔记 · ' + (c.sessions || 0) + ' 摘要'
+    $('n-inbox').textContent = state.inbox.length ? ' ' + state.inbox.length : ''
+    renderInbox(); renderMemory(); renderBackup()
+  }).catch(function (e) { toast(e.message) })
+}
+
+function renderInbox() {
+  var box = $('inboxList')
+  if (!state.inbox.length) { box.innerHTML = '<div class="empty">还没有待确认的会话。结束一个会话或空闲 5 分钟后自动出现。</div>'; return }
+  box.innerHTML = ''
+  state.inbox.forEach(function (item) {
+    var el = document.createElement('div')
+    el.className = 'item' + (state.draftPath === item.path ? ' sel' : '')
+    el.innerHTML = '<div class="t">' + esc(item.title) + '</div><div class="m">' + esc(item.turns) + ' 轮 · ' + esc((item.updatedAt || '').slice(0, 16).replace('T', ' ')) + '</div>'
+    el.onclick = function () { openDraft(item.path) }
+    box.appendChild(el)
+  })
+}
+function openDraft(path) {
+  state.draftPath = path
+  api('/inbox/file?path=' + encodeURIComponent(path)).then(function (out) {
+    state.draft = out.text || ''
+    $('inboxPath').textContent = path
+    $('inboxActions').style.display = 'flex'
+    $('inboxMd').innerHTML = md(out.text || '')
+    renderInbox()
+    openDetail('inbox')
+  }).catch(function (e) { toast(e.message) })
+}
+function accept() {
+  if (!state.draftPath) return
+  post('/inbox/accept', { path: state.draftPath, kind: $('acceptKind').value }).then(function (out) {
+    toast('已接受 → ' + out.memory); state.draftPath = ''; $('inboxActions').style.display = 'none'; $('inboxMd').innerHTML = '<div class="empty">已接受。</div>'; $('inboxPath').textContent = '选择左侧条目'; closeDetail('inbox'); return load()
+  }).catch(function (e) { toast(e.message) })
+}
+function reject() {
+  if (!state.draftPath) return
+  post('/inbox/reject', { path: state.draftPath }).then(function () {
+    toast('已忽略'); state.draftPath = ''; $('inboxActions').style.display = 'none'; $('inboxMd').innerHTML = '<div class="empty">已忽略。</div>'; $('inboxPath').textContent = '选择左侧条目'; closeDetail('inbox'); return load()
+  }).catch(function (e) { toast(e.message) })
+}
+function flushInbox() {
+  post('/inbox/flush', {}).then(function (out) { toast('已整理 ' + out.flushed + ' 条'); return load() }).catch(function (e) { toast(e.message) })
+}
+
+function renderMemory(filter) {
+  var box = $('memList')
+  var groups = {}
+  state.files.forEach(function (p) { var g = groupOf(p); (groups[g] = groups[g] || []).push(p) })
+  state.groups = groups
+  var html = ''
+  GROUP_ORDER.forEach(function (g) {
+    var items = (groups[g] || []).filter(function (p) { return !filter || p.toLowerCase().indexOf(filter) >= 0 })
+    if (!items.length) return
+    html += '<div class="group">' + esc(g) + ' · ' + items.length + '</div>'
+    items.forEach(function (p) {
+      html += '<div class="item' + (state.file === p ? ' sel' : '') + '" data-path="' + esc(p) + '"><div class="t">' + esc(titleOf(p)) + '</div><div class="m">' + esc(p) + '</div></div>'
+    })
+  })
+  box.innerHTML = html || '<div class="empty">没有匹配的记忆。</div>'
+  var items = box.querySelectorAll('.item')
+  for (var i = 0; i < items.length; i++) items[i].onclick = function () { openFile(this.getAttribute('data-path')) }
+}
+function openFile(path) {
+  state.file = path; state.editing = false
+  api('/file?path=' + encodeURIComponent(path)).then(function (out) {
+    state.fileText = out.text || ''
+    $('memPath').textContent = path
+    $('memMd').innerHTML = md(state.fileText)
+    renderMemActions()
+    renderMemory()
+    openDetail('memory')
+  }).catch(function (e) { toast(e.message) })
+}
+function renderMemActions() {
+  var box = $('memActions'), path = state.file
+  if (!path) { box.innerHTML = ''; return }
+  var editable = path.indexOf('memory/') === 0
+  var html = ''
+  if (editable && !state.editing) html += '<button class="sm" id="editBtn">编辑</button><button class="sm danger" id="delBtn">删除</button>'
+  if (state.editing) html += '<button class="sm primary" id="saveBtn">保存</button><button class="sm" id="cancelBtn">取消</button>'
+  box.innerHTML = html
+  if ($('editBtn')) $('editBtn').onclick = function () { state.editing = true; $('memMd').innerHTML = '<textarea id="editArea">' + esc(state.fileText) + '</textarea>'; renderMemActions() }
+  if ($('cancelBtn')) $('cancelBtn').onclick = function () { state.editing = false; $('memMd').innerHTML = md(state.fileText); renderMemActions() }
+  if ($('saveBtn')) $('saveBtn').onclick = function () {
+    var text = $('editArea').value
+    post('/memory/update', { path: path, content: text }).then(function () { state.editing = false; state.fileText = text; $('memMd').innerHTML = md(text); renderMemActions(); toast('已保存'); return load() }).catch(function (e) { toast(e.message) })
+  }
+  if ($('delBtn')) $('delBtn').onclick = function () {
+    if (!confirm('把 ' + path + ' 移入回收站？')) return
+    post('/memory/delete', { path: path }).then(function () { toast('已移入回收站'); state.file = ''; $('memPath').textContent = '选择文件'; $('memMd').innerHTML = '<div class="empty">已删除。</div>'; $('memActions').innerHTML = ''; closeDetail('memory'); return load() }).catch(function (e) { toast(e.message) })
+  }
+}
+function newMemory() {
+  state.file = ''; state.editing = false
+  $('memPath').textContent = '新建记忆'
+  $('memActions').innerHTML = ''
+  $('memMd').innerHTML = '<div class="form">'
+    + '<div class="row"><select id="newKind" style="width:auto"><option value="notes">笔记</option><option value="facts">事实</option><option value="decisions">决策</option><option value="projects">项目</option></select>'
+    + '<input id="newTitle" placeholder="标题" style="flex:1"></div>'
+    + '<textarea id="newContent" placeholder="正文（Markdown）"></textarea>'
+    + '<div class="row"><button class="sm primary" id="createBtn">保存</button><button class="sm" id="cancelNew">取消</button></div>'
+    + '</div>'
+  openDetail('memory')
+  $('createBtn').onclick = function () {
+    var title = $('newTitle').value.trim(), content = $('newContent').value
+    if (!title || !content.trim()) { toast('标题和内容都要填'); return }
+    post('/memory/write', { kind: $('newKind').value, title: title, content: content }).then(function (out) { toast('已写入 ' + out.path); return load().then(function () { openFile(out.path) }) }).catch(function (e) { toast(e.message) })
+  }
+  $('cancelNew').onclick = function () { $('memMd').innerHTML = '<div class="empty">从左侧选择一条记忆查看内容。</div>'; $('memPath').textContent = '选择文件' }
+}
+function renderBackup() {
+  var box = $('backupList')
+  if (!state.backups.length) { box.innerHTML = '<div class="empty">还没有快照。</div>'; return }
+  box.innerHTML = ''
+  state.backups.forEach(function (row) {
+    var el = document.createElement('div')
+    el.className = 'item'
+    el.innerHTML = '<div class="t">' + esc(row.message) + '</div><div class="m">' + esc(row.commit) + ' · ' + esc(row.date) + '</div>'
+    var btn = document.createElement('button'); btn.className = 'sm'; btn.textContent = '恢复'; btn.style.marginTop = '6px'
+    btn.onclick = function (e) { e.stopPropagation(); restore(row.commit) }
+    el.appendChild(btn)
+    box.appendChild(el)
+  })
+}
+function snapshot() { post('/backup/snapshot', {}).then(function (out) { toast(out.changed ? '已快照 ' + out.commit : '没有变化'); return load() }).catch(function (e) { toast(e.message) }) }
+function restore(commit) {
+  if (!confirm('恢复到 ' + commit + '？当前状态会先自动快照。')) return
+  post('/backup/restore', { commit: commit, confirm: true }).then(function () { toast('已恢复 ' + commit); return load() }).catch(function (e) { toast(e.message) })
+}
+
+document.getElementById('tabs').addEventListener('click', function (e) {
+  var tab = e.target.closest ? e.target.closest('.tab') : null
+  if (tab) setTab(tab.getAttribute('data-tab'))
+})
+$('refresh').onclick = function () { load().then(function () { toast('已刷新') }) }
+$('acceptBtn').onclick = accept
+$('rejectBtn').onclick = reject
+$('searchBtn').onclick = function () { renderMemory($('search').value.trim().toLowerCase()) }
+$('search').addEventListener('keydown', function (e) { if (e.key === 'Enter') renderMemory($('search').value.trim().toLowerCase()) })
+$('newBtn').onclick = newMemory
+$('snapBtn').onclick = snapshot
+var backs = document.querySelectorAll('[data-back]')
+for (var i = 0; i < backs.length; i++) backs[i].onclick = function () { closeDetail(this.getAttribute('data-back')) }
+load()
 </script>
 </body>
-</html>`
+</html>
+`
 
 function writeText(res, status, type, text) {
   res.writeHead(status, {
