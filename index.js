@@ -8,6 +8,7 @@ import { registerNative } from './src/native.js'
 import { registerRecall } from './src/recall.js'
 import { registerCapture } from './src/capture.js'
 import { inboxNudge } from './src/inbox.js'
+import { registerCommands } from './src/command.js'
 import { snapshot } from './src/backup.js'
 
 export const name = 'dsh-mesh'
@@ -132,6 +133,7 @@ export function apply(ctx, config = {}) {
   const disposeRecall = registerRecall(ctx, settings)
   const disposeCapture = registerCapture(ctx, settings)
   const disposeNudge = registerInboxNudge(ctx, settings)
+  const disposeCommands = registerCommands(ctx, settings)
 
   let backupTimer = null
   if (settings.backupEnabled === true && settings.backupIntervalMinutes > 0) {
@@ -174,6 +176,9 @@ export function apply(ctx, config = {}) {
       } catch {}
       try {
         disposeNudge?.()
+      } catch {}
+      try {
+        disposeCommands?.()
       } catch {}
       if (backupTimer) clearInterval(backupTimer)
     }

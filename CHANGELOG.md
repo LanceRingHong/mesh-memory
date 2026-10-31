@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.2 — 2026-11-01
+
+新增 `/mesh-memory` 斜杠命令，为 Go 原生记忆页提供"动作通道"。
+
+- 命令：`list` / `flush` / `accept <草稿> [kind]` / `reject <草稿>` / `delete <memory/...>` / `snapshot`。
+- 实现走 `ctx.commands.register`；Go 可通过 Remote 白名单里的 `commands/execute` 直接在 Host 上执行，本机与远程都可用，不需要局域网暴露或新 RPC。
+- 73 例测试（70 通过 / 3 跳过）。
 ## 0.9.1 — 2026-11-01
 
 修复移动端页面卡在「加载中」。
@@ -263,6 +270,7 @@
 ## 0.1.0 — 2026-10-31
 
 - Initial MVP: shared memory, 13 `mesh_*` tools, Remote delegation, file transfer.
+
 
 
 
