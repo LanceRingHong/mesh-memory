@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.4 — 2026-11-01
+
+移除原生 dshGo 面板贡献，Go 的「记忆」只保留 Web GUI（island）。
+
+- 原因：原生面板与 island 重复，且面板组件无法复刻 Web 版的两栏/Markdown；用户选定 Web 版样式。
+- `package.json` 的 `dshGo.contributes` 置空；`src/native.js` 保留实现，后续如要做远程离线兜底可重新声明。
+- Go 端重启后「插件」页签不再出现第二个「记忆」；完整功能走 `conversation.view` 的「记忆」标签。
 ## 0.9.3 — 2026-11-01
 
 原生记忆面板（`dshGo.panel`）支持操作，作为 C 路线的主入口。
@@ -279,6 +286,7 @@
 ## 0.1.0 — 2026-10-31
 
 - Initial MVP: shared memory, 13 `mesh_*` tools, Remote delegation, file transfer.
+
 
 
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-mesh",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "private": true,
   "description": "DSH Mesh: shared memory (AGENTS/skills/summaries) and cross-device DSH delegation over DSH Remote.",
   "keywords": [
@@ -71,30 +71,7 @@
       "en": "Memory"
     },
     "icon": "book",
-    "contributes": {
-      "composer.strip": [
-        {
-          "id": "memory-strip",
-          "icon": "book",
-          "text": "记忆",
-          "panel": "memory"
-        }
-      ],
-      "panels": [
-        {
-          "id": "memory",
-          "title": {
-            "zh": "记忆",
-            "en": "Memory"
-          },
-          "icon": "book",
-          "placement": [
-            "session.tab",
-            "features"
-          ]
-        }
-      ]
-    }
+    "contributes": {}
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
