@@ -20,6 +20,16 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - name: syntax check
+        shell: bash
         run: npm run check
       - name: unit tests
-        run: npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          if node --test > test-output.txt 2>&1; then
+            cat test-output.txt
+            exit 0
+          fi
+          node scripts/ci-annotate.mjs test-output.txt
+          cat test-output.txt
+          exit 1

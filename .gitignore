@@ -12,3 +12,4 @@ key.properties
 *.keystore
 build/
 .dart_tool/
+test-output.txt
