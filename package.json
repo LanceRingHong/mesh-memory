@@ -1,6 +1,6 @@
 {
   "name": "dsh-mesh",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "private": true,
   "description": "DSH Mesh: shared memory (AGENTS/skills/summaries) and cross-device DSH delegation over DSH Remote.",
   "keywords": [

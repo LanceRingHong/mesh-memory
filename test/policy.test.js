@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { makeSettings, trySymlink, tryJunction } from './helpers.js'
+import { makeSettings, trySymlink, tryJunction, tryDirLink } from './helpers.js'
 import * as policy from '../src/policy.js'
 
 test('上传白名单：只允许配置的根目录（P0-3）', async (t) => {
@@ -68,6 +68,22 @@ test('上传不跟随符号链接逃出白名单（P0-3）', async (t) => {
     () => policy.resolveUploadPath({ ...settings, allowedUploadRoots: [allowed] }, link),
     /不在允许上传的目录/,
   )
+})
+
+test('白名单根目录会做 realpath 规范化（Windows 短路径/符号链接根）', async (t) => {
+  const { settings, cleanup, root } = await makeSettings()
+  t.after(cleanup)
+  const realDir = path.join(root, 'real-downloads')
+  await fs.mkdir(realDir, { recursive: true })
+  const file = path.join(realDir, 'artifact.tgz')
+  await fs.writeFile(file, 'payload', 'utf8')
+
+  const linkDir = path.join(root, 'linked-downloads')
+  if (!(await tryDirLink(t, realDir, linkDir))) return
+
+  // 配置里写的是链接路径，文件在真实路径下：canonicalize 之后应当放行。
+  const resolved = await policy.resolveUploadPath({ ...settings, allowedUploadRoots: [linkDir] }, file)
+  assert.equal(resolved.size, 7)
 })
 
 test('上传白名单拦住经由 junction 的目录逃逸（P0-3）', async (t) => {

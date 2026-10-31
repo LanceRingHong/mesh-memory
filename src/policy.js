@@ -46,7 +46,20 @@ export async function resolveUploadPath(settings, localPath) {
   const stat = await fs.stat(real)
   if (!stat.isFile()) throw new Error('localPath 必须是普通文件')
 
-  const roots = (settings.allowedUploadRoots || []).map((root) => path.resolve(String(root)))
+  // 根目录也要 canonicalize：Windows 8.3 短路径（RUNNER~1）与 realpath 的长路径
+  // 字符串不相等，直接比较会误判为“越界”。根不存在时退回 resolve 结果。
+  const roots = (
+    await Promise.all(
+      (settings.allowedUploadRoots || []).map(async (root) => {
+        const abs = path.resolve(String(root))
+        try {
+          return await fs.realpath(abs)
+        } catch {
+          return abs
+        }
+      }),
+    )
+  ).filter(Boolean)
   if (!roots.length) throw new Error('插件未配置 allowedUploadRoots，已拒绝上传')
   const target = normalize(real)
   const inside = roots.some((root) => {

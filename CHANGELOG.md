@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.1 — 2026-10-31
+
+修复 Windows CI 暴露的上传白名单误判。
+
+- `resolveUploadPath` 现在对 `allowedUploadRoots` 做 `realpath` 规范化（根不存在时退回 `resolve`）。
+  之前根目录若写成 8.3 短路径（GitHub Windows runner 的 `RUNNER~1`）或目录链接，
+  真实文件路径（长路径）会与配置字符串不相等，被误判为“不在允许目录”。
+- 新增回归测试：白名单根为目录链接时，真实路径下的文件仍应放行。
+- CI：失败时用 `scripts/ci-annotate.mjs` 把测试输出尾部转成 annotation（公开 API 可读，便于无 token 排障）。
+
 ## 0.6.0 — 2026-10-31
 
 审计整改第三批：记忆生命周期、检索一致性、可运维性、CI。无破坏性行为变更（除新增确认参数）。

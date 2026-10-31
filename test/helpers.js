@@ -68,3 +68,14 @@ export async function tryJunction(t, target, linkPath) {
     return false
   }
 }
+
+/** 目录链接：Windows 用 junction（免特权），其他平台用 symlink。 */
+export async function tryDirLink(t, target, linkPath) {
+  try {
+    await fs.symlink(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir')
+    return true
+  } catch (error) {
+    t.skip(`无法创建目录链接（${error.code || error.message}）`)
+    return false
+  }
+}
