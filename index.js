@@ -45,6 +45,8 @@ const SKILL = `# dsh-mesh：跨设备共享记忆与委托
 
 - 用户提到“上次/之前/另一台设备”时，先 \`mesh_memory_search\`。
 - 需要原文时 \`mesh_memory_read\`，不要直接读共享目录以外的路径。
+- 写错/过期：\`mesh_memory_update\` 就地改；\`mesh_memory_delete\` 是软删除（进 \`.trash/\`，需 confirm），可用 \`mesh_memory_restore\` 恢复。
+- 有 Syncthing 冲突时用 \`mesh_conflicts\` 列出，读内容后决定保留哪份。
 - 重要结论用 \`mesh_memory_write\` 写回；会话结束用 \`mesh_digest\` 写摘要。
 
 ## 委托协议
