@@ -9,7 +9,7 @@
 ## 分层
 
 ```
-L4 工具层  mesh_status / memory_* / peers / workspaces / run / read / interrupt / fetch_file / send_file
+L4 工具层  mesh_status / memory_* / peers / workspaces / run / wait / send / read / interrupt / fetch_file / send_file
 L3 编排层  工作区选择、委托、operationId、结果摘要（**没有**内部串行队列）
 L2 记忆层  AGENTS.shared.md、skills/、memory/、sessions/<device>/、index/
 L1 同步层  Syncthing / git / 手工（插件只读写目录）
@@ -39,12 +39,13 @@ DSH-mesh/
 
 ## AGENTS 物化
 
-- `mesh_memory_sync` 读取 `AGENTS.shared.md`，在 `$DSH_HOME/AGENTS.md` 里维护：
-  `<!-- dsh-mesh:begin --> … <!-- dsh-mesh:end -->`
+- 0.5.0 起分两步：`mesh_memory_sync()` 只返回预览（托管块行级 diff、`sourceSha256`、skills 清单），不写盘；`mode:"apply" + confirm + expectedSha256` 才写入。
+- `materializeAgents` 在 `$DSH_HOME/AGENTS.md` 里维护：
+  `<!-- dsh-mesh:begin --> … <!-- dsh-mesh:end -->`，块内带来源标记（`sha256` + 源文件更新时间）。
 - 只替换托管块，不动用户手写内容；写前备份 `AGENTS.md.bak-mesh-<时间戳>-<随机后缀>`，只保留最近 10 份。
 - 共享内容里的 `<!-- dsh-mesh:begin/end -->` 会被转义；出现重复标记时拒绝写入。
 - 源文件缺失或内容为空而托管块非空时拒绝物化（避免读失败清空规则）。
-- 默认 `autoSyncAgents=false`，由用户显式触发。
+- 默认 `autoSyncAgents=false`，由用户显式触发；开启时启动仍会直接物化（无交互场景，带备份与哈希来源）。
 
 ## 技能同步
 
@@ -61,14 +62,18 @@ DSH-mesh/
 ## 委托
 
 ```
-mesh_run(hostId, task)
-  → remote_list_workspaces（可选）
-  → remote_create_session
-  → remote_send_message
+mesh_run(hostId, task, workspaceId?|workspacePath?)
+  → remote_list_workspaces → pickWorkspace（显式不匹配即报错；未指定且多工作区标记 fallback）
+  → remote_create_session（operationId 可来自调用方）
+  → remote_send_message（失败则尝试 interrupt，避免孤儿会话）
   → remote_wait_sessions
-  → remote_read_session（最多重试 3 次）
+  → remote_read_session（最多重试 3 次；有明确状态就停）
+  → completionOf(status)：只有 idle/completed 才算完成
   → summarizeSession：标题 / 助手文本 / 工具 / 待审批
 ```
+
+- 未完成时用 `mesh_wait` 续等；追加指令用 `mesh_send`（同一 `operationId` 幂等）。
+- 所有 Remote 调用经 `ctx.tools.execute()` 走 DSH 的策略链（pre-execute / guard / 可见性），不直接调用工具定义。
 
 - 远程服务端同一客户端同时只连一台 Host；插件**没有**内部队列或锁，并发 `mesh_run` 由调用方自己保证不互相替换连接。
 - 目标端按自己的权限执行；遇到审批会在结果里显示，需目标端用户处理，或 `mesh_interrupt` 取消。
@@ -87,7 +92,7 @@ mesh_run(hostId, task)
 - **读**：只读共享目录内的普通文件；`lstat` 拒符号链接，`realpath` 必须仍在 `memoryDir` 内，单文件大小受限。`readMemory` / dashboard `/api/file` / Go 面板共用同一套判断。
 - **写**：所有记忆文件用唯一临时文件 + `rename`；`mesh_digest` 的 `sessionId` 走白名单。
 - **传**：`mesh_send_file` 走 `allowedUploadRoots` 白名单与敏感文件名拒绝（`src/policy.js`）。
-- **指令**：`AGENTS.shared.md` 与 `skills/` 属于“指令类”内容，来源是同步目录；当前物化有转义/备份/空内容保护，但**没有**用户二次确认——这是 0.5.0 的重点。
+- **指令**：`AGENTS.shared.md` 与 `skills/` 属于“指令类”内容，来源是同步目录。0.5.0 起应用需要预览 + `confirm` + 源哈希；但确认仍由 Agent 转述用户同意，宿主级审批弹窗留给 0.6.x。
 
 ## 限制
 

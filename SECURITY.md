@@ -22,12 +22,13 @@
 - **写入**：`mesh_digest` 的 `sessionId` 走白名单；记忆文件用临时文件 + `rename`；`AGENTS.md` 托管块会转义 `<!-- dsh-mesh:* -->` 标记并保留 10 份备份。
 - **上传**：`mesh_send_file` 只允许 `allowedUploadRoots` 内的文件；`.env`、`id_*`、`*.pem`、`*.key`、`*.jks`、`.ssh/` 等永远拒绝。
 
-### 已知未覆盖（计划 0.5.x）
+### 已知未覆盖（计划 0.6.x）
 
-- `mesh_memory_sync` 仍可被 Agent 直接调用（有备份、标记转义、空内容保护，但**没有**用户二次确认）。
-- 嵌套 Remote 调用尚未经过 DSH 的 `tools/pre-execute` 审批链。
+- `mesh_memory_sync` 的“应用”由上下文里的 Agent 转述用户同意（`confirm` + `expectedSha256`），**不是**宿主级审批弹窗；能改 Agent 上下文的攻击者仍可能说服模型去应用。
 - 没有加密选项；共享目录里的敏感记忆仍以明文同步。
 - 召回是词面 BM25，不保证语义准确；恶意记忆条目的注入风险由“数据不是指令”约束承担，未做内容审查。
+- dashboard 仅靠 Host 头判断回环，且同时起独立端口与 `/dsh-mesh` 路由（计划合并为单服务 + token）。
+- 没有索引：每轮召回仍遍历记忆目录（有上限与异步化，但 O(n)）。
 
 ## 建议
 

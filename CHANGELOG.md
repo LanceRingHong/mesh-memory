@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.5.0 — 2026-10-31
+
+审计整改第二批：信任边界与 Remote 语义。**含行为变更，升级前先看第一节。**
+
+### 行为变更（可能影响现有用法）
+
+- `mesh_memory_sync` 默认**只预览**（返回 AGENTS 托管块的行级 diff 与 skills 清单，不写盘）。应用需要 `mode:"apply"` + `confirm:true` + `expectedSha256`（预览返回的 `agents.sourceSha256`）。
+- `mesh_run` 的 `ok` 只在目标会话**明确完成**（`idle`/`completed`）时为 `true`；`running`/`accepted`/待审批都返回 `ok:false` 并附 `hint`，需用 `mesh_wait` 续等。
+- 显式传入的 `workspacePath` / `workspaceId` 找不到时**直接报错**并列出候选，不再静默换到第一个工作区。
+
+### 安全 / 信任边界
+
+- 嵌套 Remote 调用改走 `ctx.tools.execute()`：经过 `tools/pre-execute`、guard 与 per-agent 可见性检查，不再直接 `tool.execute()` 绕过审批链。
+- AGENTS/skills 采用“预览 → 应用”两步；应用前校验源文件哈希，避免预览后内容被替换的盲写。
+- 托管块加入来源标记：`> 来源：AGENTS.shared.md · sha256:… · 更新于 …`，便于事后审计这条规则从哪来。
+
+### Remote 语义
+
+- 新增 `mesh_wait`（等待会话完成/审批）与 `mesh_send`（追加消息，支持幂等 `operationId`）。
+- `mesh_run` 支持调用方传入 `operationId`，重试不会重复建会话/发消息。
+- 建会话成功但发送失败时尝试 `mesh_interrupt`，减少孤儿会话。
+- 未指定工作区且目标有多个 harness 工作区时，结果带 `workspaceFallback:true` 与候选列表。
+- 上传/下载回执：`accepted` / `pending` / `timeout` 不再被当成成功，必须出现 `path`/`name`/`bytes`。
+
+### 测试
+
+- 42 例（39 通过 / 3 跳过：本机无符号链接特权，已用 junction 覆盖 realpath 路径）。
+- 新增 `test/remote.test.js`（嵌套派发、可见性、工作区、状态、回执）与 `test/agents.test.js`（预览/应用/哈希/diff/转义）。
+
 ## 0.4.6 — 2026-10-31
 
 安全与数据完整性加固（第三方审计整改第一批；不含新功能）。

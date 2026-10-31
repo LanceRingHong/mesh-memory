@@ -11,9 +11,22 @@ import {
   sessionsFile,
   writeFileAtomic,
 } from './store.js'
-import { materializeAgents, syncSkills } from './agents.js'
+import { materializeAgents, previewAgents, previewSkills, syncSkills } from './agents.js'
 import { resolveUploadPath } from './policy.js'
-import { asObject, listHosts, listWorkspaces, runOnHost, readSession, interruptSession, downloadFile, uploadFile } from './remote.js'
+import {
+  asObject,
+  listHosts,
+  listWorkspaces,
+  runOnHost,
+  readSession,
+  interruptSession,
+  downloadFile,
+  uploadFile,
+  waitSessions,
+  sendMessage,
+  completionOf,
+  transferOutcome,
+} from './remote.js'
 
 /**
  * 桌面 profile 能从 ~/.dsh/profiles/node_modules 解析到 dsh-tools；
@@ -180,16 +193,40 @@ export function registerTools(ctx, settings) {
 
   add({
     name: 'mesh_memory_sync',
-    description: '把 AGENTS.shared.md 物化到本机设备级 AGENTS.md（带备份），并可把共享 skills 复制到本机技能目录。',
-    parameters: { force: bool('覆盖已存在的同名 skill（默认 false）') },
+    description:
+      '把 AGENTS.shared.md 物化到本机设备级 AGENTS.md，并可把共享 skills 复制到本机技能目录。默认只预览（返回 diff），确认后才写入。',
+    parameters: {
+      mode: str('preview = 只读预览（默认）；apply = 应用', { enum: ['preview', 'apply'] }),
+      confirm: bool('apply 时必须显式传 true（表示用户已看过 diff 并同意）'),
+      expectedSha256: str('apply 时必填：预览返回的 agents.sourceSha256，防止预览后源文件已变化'),
+      force: bool('覆盖已存在的同名 skill（默认 false）'),
+    },
     async execute(args) {
       await ensureLayout(settings)
-      const agents = await materializeAgents(settings)
-      let skills = null
-      if (args.force === true || settings.syncSkills) {
-        skills = await syncSkills(settings, { force: args.force === true })
+      const agents = await previewAgents(settings)
+      const skills = await previewSkills(settings)
+
+      if (args.mode !== 'apply') {
+        return json({
+          ok: true,
+          mode: 'preview',
+          agents,
+          skills,
+          next:
+            '把 agents.diff 与 skills.copy 展示给用户；得到明确同意后，用 mode:"apply"、confirm:true、' +
+            'expectedSha256=<agents.sourceSha256> 再调用（需要覆盖同名 skill 时再加 force:true）。',
+        })
       }
-      return json({ ok: true, agents, skills })
+      // P1-2：应用是“指令类”改动，必须有确认与预览哈希，不能盲写。
+      if (args.confirm !== true) throw new Error('apply 需要 confirm:true：先把 diff 给用户看，得到同意后再应用')
+      if (!args.expectedSha256) throw new Error('apply 需要 expectedSha256（取自预览返回的 agents.sourceSha256）')
+
+      const applied = await materializeAgents(settings, { expectedSha256: args.expectedSha256 })
+      let skillsApplied = null
+      if (args.force === true || settings.syncSkills) {
+        skillsApplied = await syncSkills(settings, { force: args.force === true })
+      }
+      return json({ ok: true, mode: 'apply', agents: applied, skills: skillsApplied })
     },
   })
 
@@ -282,6 +319,7 @@ export function registerTools(ctx, settings) {
       workspacePath: str('按工作区路径/标题选择（可选，如 /sdcard）'),
       waitMs: num('等待结果的毫秒数，默认 30000（1000-60000）'),
       readMessages: num('读回的消息条数，默认 20（1-50）'),
+      operationId: str('调用方提供的幂等键（可选）：同一键重试不会重复建会话/发消息'),
     },
     async execute(args, exec) {
       await ensureLayout(settings)
@@ -292,12 +330,88 @@ export function registerTools(ctx, settings) {
         task: args.task,
         waitMs: clampInt(args.waitMs, 1000, 60000, 30000),
         readMessages: clampInt(args.readMessages, 1, 50, 20),
+        operationId: args.operationId,
       })
-      const hint =
-        result.status === 'needs_user_input'
-          ? '目标端有待审批操作：需要在目标设备上确认，或用 mesh_interrupt 取消。'
-          : undefined
-      return json({ ok: true, ...result, ...(hint ? { hint } : {}) })
+      const completion = completionOf(result.status)
+      const hints = []
+      if (completion.finished && !completion.failed) hints.push('目标会话已完成。')
+      if (completion.failed) hints.push('目标会话以失败状态结束，用 mesh_read 查看详情。')
+      if (!completion.finished && completion.waitingFor === 'approval') {
+        hints.push('目标端有待审批操作：需要在目标设备上确认，或用 mesh_interrupt 取消；确认后用 mesh_wait 继续。')
+      } else if (!completion.finished) {
+        hints.push('目标仍在运行：用 mesh_wait 等待，或 mesh_read 读取当前进度。')
+      }
+      if (result.workspaceFallback) {
+        const candidates = (result.workspaceCandidates || [])
+          .map((item) => `${item.title || '未命名'}${item.path ? ` @ ${item.path}` : ''}`)
+          .join('；')
+        hints.push(`没有指定工作区，已回退到第一个（可能不是你要的）。候选：${candidates}。建议显式传 workspaceId 或 workspacePath。`)
+      }
+      // P1-4：只有明确完成才算 ok；running/accepted 不等于成功。
+      return json({
+        ok: completion.finished && !completion.failed,
+        finished: completion.finished,
+        ...result,
+        ...(hints.length ? { hint: hints.join(' ') } : {}),
+      })
+    },
+  })
+
+  add({
+    name: 'mesh_wait',
+    description: '等待某台 Remote Host 上的会话进入完成/审批状态，并返回最新摘要。用于 mesh_run 还在运行时的续等。',
+    parameters: {
+      hostId: str('目标 Host id', { required: true }),
+      workspaceId: str('工作区 id', { required: true }),
+      sessionId: str('会话 id', { required: true }),
+      timeoutMs: num('等待毫秒数，默认 30000（0-60000；0 表示只看当前状态）'),
+      readMessages: num('读回的消息条数，默认 20（1-50）'),
+    },
+    async execute(args, exec) {
+      await ensureLayout(settings)
+      await waitSessions(ctx, exec, {
+        hostId: args.hostId,
+        workspaceId: args.workspaceId,
+        sessionId: args.sessionId,
+        timeoutMs: clampInt(args.timeoutMs, 0, 60000, 30000),
+      })
+      const result = await readSession(ctx, exec, {
+        hostId: args.hostId,
+        workspaceId: args.workspaceId,
+        sessionId: args.sessionId,
+        maxMessages: clampInt(args.readMessages, 1, 50, 20),
+      })
+      const completion = completionOf(result.status)
+      return json({
+        ok: completion.finished && !completion.failed,
+        ...result,
+        finished: completion.finished,
+        ...(completion.waitingFor ? { waitingFor: completion.waitingFor } : {}),
+        ...(completion.failed ? { hint: '目标会话失败，用 mesh_read 查看详情。' } : {}),
+      })
+    },
+  })
+
+  add({
+    name: 'mesh_send',
+    description: '向某台 Remote Host 上已存在的会话追加一条消息（同一 operationId 重试是幂等的）。',
+    parameters: {
+      hostId: str('目标 Host id', { required: true }),
+      workspaceId: str('工作区 id', { required: true }),
+      sessionId: str('会话 id', { required: true }),
+      message: str('要发送的消息', { required: true }),
+      operationId: str('幂等键（可选）：重试时传同一个值，避免重复投递'),
+    },
+    async execute(args, exec) {
+      await ensureLayout(settings)
+      const result = await sendMessage(ctx, exec, {
+        hostId: args.hostId,
+        workspaceId: args.workspaceId,
+        sessionId: args.sessionId,
+        message: args.message,
+        operationId: args.operationId,
+      })
+      return json({ ok: true, ...result })
     },
   })
 
@@ -357,6 +471,15 @@ export function registerTools(ctx, settings) {
           sessionId: args.sessionId,
           path: args.path,
         })
+        const outcome = transferOutcome(result)
+        if (!outcome.ok) {
+          return json({
+            ok: false,
+            reason: outcome.reason,
+            ...result,
+            hint: '下载回执里没有落盘信息（accepted/pending/timeout 不等于成功）。可重试或改用 /root/workspace。',
+          })
+        }
         return json({ ok: true, ...result })
       } catch (error) {
         return json({
@@ -390,11 +513,13 @@ export function registerTools(ctx, settings) {
           localPath: resolved.path,
           name: args.name,
         })
-        if (result.status === 'unknown') {
+        const outcome = transferOutcome(result)
+        if (!outcome.ok) {
           return json({
             ok: false,
+            reason: outcome.reason,
             ...result,
-            hint: '上传回执为 unknown，文件可能未落盘。Android 上 /sdcard 工作区常见；改用 /root/workspace 重试。',
+            hint: '上传回执里没有落盘信息（accepted/pending/timeout 不等于成功）。Android 上 /sdcard 工作区常见；改用 /root/workspace 重试。',
           })
         }
         return json({ ok: true, local: { path: resolved.path, size: resolved.size }, ...result })

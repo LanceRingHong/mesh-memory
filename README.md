@@ -2,7 +2,7 @@
 
 > 跨设备共享记忆 + DSH 委托，给 DeepSeek Harness 装上“不会失忆的第二大脑”。
 
-![version](https://img.shields.io/badge/version-0.4.6-blue)
+![version](https://img.shields.io/badge/version-0.5.0-blue)
 ![license](https://img.shields.io/github/license/LanceRingHong/dsh-mesh)
 ![DSH](https://img.shields.io/badge/DSH-0.2.1--rc.x-8a2be2)
 ![Node](https://img.shields.io/badge/Node-%E2%89%A518-3c873a)
@@ -12,7 +12,7 @@
 - 通过 **DSH Remote** 委托另一台设备建会话、执行任务、读结果、传文件。
 - 桌面有侧栏/顶栏入口，DSH Go 有原生记忆页。
 
-> 当前版本 `0.4.6`（安全与数据完整性加固版），MIT。DSH Go 原生记忆页的配套 PR：
+> 当前版本 `0.5.0`（信任边界与 Remote 语义版，含行为变更），MIT。DSH Go 原生记忆页的配套 PR：
 > [dsh-go #168](https://github.com/ccch1mneyyy/dsh-Go/pull/168)（Ready for review）。
 
 ---
@@ -58,7 +58,7 @@ DSH 默认每个会话都是新的。`dsh-mesh` 把“该记住的事”写成 M
 | 共享记忆 | `AGENTS.shared.md`、`skills/`、`memory/`、`sessions/` 全部是文件 |
 | 自动召回 | 每轮 BM25 检索，注入 `<dsh-mesh-memory>`；带预算和去重 |
 | 记忆 schema | `description`、`memoryType`、`tags`、`aliases`、`baseline`、`validAt`、`invalidAt`、`supersededBy` |
-| 跨设备委托 | `mesh_run` / `mesh_read` / `mesh_interrupt` / `mesh_peers` / `mesh_workspaces` |
+| 跨设备委托 | `mesh_run` / `mesh_wait` / `mesh_send` / `mesh_read` / `mesh_interrupt` / `mesh_peers` / `mesh_workspaces` |
 | 文件传输 | `mesh_send_file` / `mesh_fetch_file`（受 Remote 工作区与大小限制） |
 | 桌面 UI | 侧栏底部、对话顶部、对话「记忆」标签；完整树 + Markdown 预览 |
 | Go UI | 原生记忆页（companion PR）；`dshGo` 面板；`conversation.view` page island |
@@ -279,14 +279,27 @@ supersededBy: "memory/facts/newer.md"
 | `mesh_memory_write` | 写记忆，支持全部 frontmatter 字段 |
 | `mesh_memory_search` | 搜 AGENTS/notes/summaries |
 | `mesh_memory_read` | 读共享目录内文件 |
-| `mesh_memory_sync` | 物化 AGENTS、同步 skills |
+| `mesh_memory_sync` | 预览 AGENTS diff / 预览 skills；`mode:"apply"` 才写入 |
 | `mesh_digest` | 写会话摘要 |
 | `mesh_peers` | 列出在线 Host |
 | `mesh_workspaces` | 列出目标工作区 |
-| `mesh_run` | 建会话 + 发任务 + 等待 + 读回 |
+| `mesh_run` | 建会话 + 发任务 + 等待 + 读回；`ok` 只在完成时为真 |
+| `mesh_wait` | 等会话完成/审批，返回最新摘要 |
+| `mesh_send` | 向已有会话追加消息（幂等 `operationId`） |
 | `mesh_read` | 读远程会话历史并摘要 |
 | `mesh_interrupt` | 中断远程会话 |
-| `mesh_fetch_file` / `mesh_send_file` | 下载/上传工作区文件 |
+| `mesh_fetch_file` / `mesh_send_file` | 下载/上传工作区文件（回执须含落盘信息） |
+
+`mesh_memory_sync` 的两步用法：
+
+```text
+# 1) 预览（默认）
+mesh_memory_sync()
+# → agents.diff: 行级 +/-；agents.sourceSha256；skills.copy / skills.skip
+
+# 2) 用户看过 diff 并同意后应用
+mesh_memory_sync({ mode: "apply", confirm: true, expectedSha256: "<agents.sourceSha256>" })
+```
 
 HTTP API：
 
@@ -374,7 +387,7 @@ http://127.0.0.1:8765/
 - 下载 ≤50 MiB；上传中继 ≤20 MiB、P2P ≤1 GiB；只限工作区。
 - Android `/sdcard` 工作区的 Remote 上传/下载可能失败，优先 `/root/workspace`。
 - `mesh_run` 目标端按自己的权限执行，不会提权；审批由目标端处理。
-- **未做**（计划在 0.5.x）：AGENTS/skills 应用的二次确认、Remote job 状态机、索引缓存。当前 `mesh_memory_sync` 仍会直接物化托管块（带备份 + 标记转义 + 备份轮转）。
+- **未做**（计划在 0.6.x）：Remote job 持久状态机、召回索引/缓存、冲突合并 UI、独立页面升级。`mesh_memory_sync` 已改为“预览 → 应用”，但确认仍由 Agent 转述用户同意（宿主审批依赖）。
 - Syncthing 的发现/中继服务器、DSH Remote 的账号/中继属于第三方边界，请按自己的隐私要求配置。
 
 ## 故障排查
