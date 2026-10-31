@@ -36,9 +36,9 @@ window.__ModuleLoader__.load({
       // 容器
       '.dsh-mesh-explorer{position:relative;display:flex;flex-direction:column;min-height:0;height:100%;color:var(--dsw-alias-label-primary,#e7eaf0);font-size:13.5px;line-height:1.6;padding:2px 2px 8px}',
       // 顶部
-      '.dsh-mesh-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;padding:4px 2px 16px;flex:none}',
+      '.dsh-mesh-head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding:2px 2px 10px;flex:none}',
       '.dsh-mesh-title{font-size:22px;font-weight:700;margin:0;letter-spacing:.2px}',
-      '.dsh-mesh-sub{opacity:.62;font-size:12px;margin-top:5px;word-break:break-all}',
+      '.dsh-mesh-sub{opacity:.62;font-size:12px;margin:0;word-break:break-all}',
       // 按钮
       '.dsh-mesh-btn{background:var(--dsw-alias-interactive-bg-hover,rgba(127,127,127,.1));color:inherit;border:1px solid var(--dsw-alias-border-l2,rgba(127,127,127,.26));border-radius:9px;padding:7px 13px;cursor:pointer;font:inherit;font-size:13px;transition:border-color .15s,background .15s}',
       '.dsh-mesh-btn:hover{border-color:var(--dsw-alias-brand-primary,#6ee7b7)}',
@@ -643,16 +643,13 @@ window.__ModuleLoader__.load({
       const draftHtml = useMemo(() => sanitizeHtml(renderMarkdown(draftText.slice(0, 100000))), [draftText])
 
       const head = h('div', { className: 'dsh-mesh-head', key: 'head' }, [
-        h('div', { key: 'title' }, [
-          h('h2', { className: 'dsh-mesh-title', key: 't' }, '记忆'),
-          h(
-            'div',
-            { className: 'dsh-mesh-sub', key: 's' },
-            status
-              ? `${status.device || 'device'} · ${counts.facts || 0} 事实 · ${counts.notes || 0} 笔记 · ${counts.sessions || 0} 摘要`
-              : '加载中…',
-          ),
-        ]),
+        h(
+          'div',
+          { className: 'dsh-mesh-sub', key: 's' },
+          status
+            ? `${status.device || 'device'} · ${counts.facts || 0} 事实 · ${counts.notes || 0} 笔记 · ${counts.sessions || 0} 摘要`
+            : '加载中…',
+        ),
         h('div', { className: 'dsh-mesh-actions', key: 'a' }, [
           h('button', { className: 'dsh-mesh-btn', key: 'r', onClick: load, disabled: busy }, busy ? '刷新中…' : '刷新'),
         ]),
@@ -660,7 +657,7 @@ window.__ModuleLoader__.load({
 
       const tabs = [
         ['inbox', counts.inbox ? `待确认 · ${counts.inbox}` : '待确认'],
-        ['memory', '记忆'],
+        ['memory', '记忆库'],
         ['backup', '备份'],
       ]
 
@@ -987,3 +984,4 @@ window.__ModuleLoader__.load({
     return { apply, inject: ['slots'] }
   },
 })
+
