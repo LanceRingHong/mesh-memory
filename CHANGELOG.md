@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.17.0 — 2026-11-01
+
+S0 收口：一个前端、一次部署、一个入口。
+
+- **客户端上线**：`client/` 构建产物直接输出到 `plugin/public`（`vite.config.ts` 的 `outDir`），随插件安装。
+- **serve 托管静态**：`bin/mm-serve.mjs` 在 `127.0.0.1:8767/` 直接提供 React 客户端（SPA 回退、静态资源长缓存、`/api/*` 优先）；`/api/health` 版本改为读 `package.json`（原硬编码 0.14.0）。
+- **插件内置托管**：`src/dashboard.js` 增加 `/dsh-mesh/app/*` 静态服务（`plugin/public`），同一份构建也能在 DSH 同源下直接用。
+- **旧页面下线**：删除 668 行三段式原生页；`/`、`/dsh-mesh/` 改为 302 到 `/dsh-mesh/app/`，`/dsh-mesh/api/*` 全部保留（DSH 面板与 Go 端不受影响）。
+- **客户端 API 前缀自适应**：`client/src/api.ts` 按当前路径推断 `/api` 或 `/dsh-mesh/api`，同一份构建可跑在两个挂载点。
+- 修复：模板字面量吃掉正则反斜杠导致旧页面整页 `SyntaxError`（页面已删除，问题随之下线）。
+
 ## 0.13.0 — 2026-11-01
 
 仓库结构 profile：记忆界面按用户自己的分类/分组/配色渲染。

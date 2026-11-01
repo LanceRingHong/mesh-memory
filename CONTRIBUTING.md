@@ -12,7 +12,7 @@
 ## 本地安装
 
 ```powershell
-git clone https://github.com/LanceRingHong/dsh-mesh.git
+git clone https://github.com/LanceRingHong/mesh-memory.git
 cd dsh-mesh
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Profiles desktop
 ```

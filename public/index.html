@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark" data-density="comfortable">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0a0d14" />
+    <meta name="description" content="mesh-memory 驾驶舱：共享库、设备拓扑、任务看板与设置。" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <title>mesh-memory · 驾驶舱</title>
+    <script>
+      // 在 React 挂载前应用本地主题，避免浅色模式启动时闪一下深色。
+      try {
+        var stored = window.localStorage.getItem('mesh-memory.client.settings.v1')
+        if (stored) {
+          var settings = JSON.parse(stored)
+          var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+          var theme =
+            settings.theme === 'light' || settings.theme === 'dark'
+              ? settings.theme
+              : prefersDark
+                ? 'dark'
+                : 'light'
+          document.documentElement.dataset.theme = theme
+          document.documentElement.dataset.density = settings.density === 'compact' ? 'compact' : 'comfortable'
+          if (typeof settings.accent === 'string' && /^#[0-9a-f]{6}$/i.test(settings.accent)) {
+            document.documentElement.style.setProperty('--accent', settings.accent)
+            var rgb = /^#(..)(..)(..)$/i.exec(settings.accent)
+            if (rgb) {
+              document.documentElement.style.setProperty(
+                '--accent-rgb',
+                parseInt(rgb[1], 16) + ', ' + parseInt(rgb[2], 16) + ', ' + parseInt(rgb[3], 16),
+              )
+            }
+          }
+        }
+      } catch (error) {
+        /* localStorage 不可用时保持默认深色 */
+      }
+    </script>
+    <script type="module" crossorigin src="./assets/index-Db90wwcm.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-DcVUR_aV.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

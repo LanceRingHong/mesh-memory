@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import http from 'node:http'
+import fs from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { URL } from 'node:url'
 import { settingsOf } from '../src/config.js'
 import { ensureLayout, walk, readInside, parseFrontmatter, counts, listDevices, searchMemory, readMemory, writeNote, updateNote, trashNote } from '../src/store.js'
@@ -16,11 +18,13 @@ import { readProfile, ensureProfile } from '../src/profile.js'
 import { collectionCounts, queryMemory, statusCounts } from '../src/query.js'
 
 /**
- * mesh-memory serve（M1）：只读 REST + SSE，供客户端/原型连接。
- * 默认 127.0.0.1:8767；写操作留给 M2。
+ * mesh-memory serve：REST 读写 + 托管客户端构建。
+ * 默认 127.0.0.1:8767；`/api/*` 是接口，其余路径给 client/dist（plugin/public）。
  */
 const port = Number(process.env.MESH_PORT || 8767)
 const token = String(process.env.MESH_TOKEN || '').trim()
+const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public')
+const PKG_VERSION = JSON.parse(await fs.readFile(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8')).version
 const settings = settingsOf({
   memoryDir: process.env.DSH_MESH_DIR || '',
   deviceName: process.env.DSH_MESH_DEVICE || '',
@@ -54,6 +58,7 @@ async function collectData() {
       permalink: String(parsed.attrs.permalink || ''),
       tags: Array.isArray(parsed.attrs.tags) ? parsed.attrs.tags : [],
       updatedAt: String(parsed.attrs.updatedAt || parsed.attrs.createdAt || ''),
+      checksum: String(parsed.attrs.checksum || ''),
       body: String(parsed.body || '').slice(0, 6000),
     })
   }
@@ -115,6 +120,48 @@ function send(res, code, body, type = 'application/json; charset=utf-8') {
   res.end(type.startsWith('application/json') ? JSON.stringify(body) : String(body))
 }
 
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.ico': 'image/x-icon',
+  '.json': 'application/json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.woff2': 'font/woff2',
+}
+
+/** 托管客户端构建（plugin/public）；未知路径回退 index.html 交给前端路由。 */
+async function serveStatic(res, root, urlPath) {
+  const rootAbs = path.resolve(root)
+  const rel = decodeURIComponent(String(urlPath || '')).replace(/^\/+/, '')
+  let file = path.resolve(rootAbs, rel || 'index.html')
+  if (file !== rootAbs && !file.startsWith(rootAbs + path.sep)) return false
+  try {
+    const info = await fs.stat(file)
+    if (info.isDirectory()) file = path.join(file, 'index.html')
+  } catch {
+    file = path.join(rootAbs, 'index.html')
+  }
+  let body
+  try {
+    body = await fs.readFile(file)
+  } catch {
+    return false
+  }
+  const isIndex = path.basename(file) === 'index.html'
+  res.writeHead(200, {
+    'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
+    'Cache-Control': isIndex ? 'no-store' : 'public, max-age=31536000, immutable',
+    'Content-Length': body.length,
+  })
+  res.end(body)
+  return true
+}
+
 function readJson(req) {
   return new Promise((resolve, reject) => {
     let data = ''
@@ -132,7 +179,7 @@ function readJson(req) {
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') return send(res, 204, '')
   const url = new URL(req.url, `http://127.0.0.1:${port}`)
-  if (token && req.headers['x-mesh-token'] !== token && url.searchParams.get('token') !== token) {
+  if (token && url.pathname.startsWith('/api/') && req.headers['x-mesh-token'] !== token && url.searchParams.get('token') !== token) {
     return send(res, 401, { ok: false, error: 'token required' })
   }
   if (req.method !== 'GET' && req.headers['x-mesh-action'] !== '1') {
@@ -150,6 +197,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'PUT' && url.pathname.startsWith('/api/memories/')) {
       const rel = decodeURIComponent(url.pathname.slice('/api/memories/'.length))
       const body = await readJson(req)
+      if (body.expectedChecksum) {
+        const current = parseFrontmatter(await readInside(settings, rel, { maxBytes: 200_000 })).attrs.checksum
+        if (current && current !== body.expectedChecksum) return send(res, 409, { ok: false, error: 'checksum mismatch：文件已被改动，请刷新后再编辑' })
+      }
       return send(res, 200, { ok: true, ...(await updateNote(settings, rel, body)) })
     }
     if (req.method === 'DELETE' && url.pathname.startsWith('/api/memories/')) {
@@ -187,7 +238,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { ok: true, profile })
     }
     if (url.pathname === '/api/health') {
-      return send(res, 200, { ok: true, version: '0.14.0', device: settings.deviceName, agent: settings.agentName })
+      return send(res, 200, { ok: true, version: PKG_VERSION, device: settings.deviceName, agent: settings.agentName })
     }
     if (url.pathname === '/api/data') return send(res, 200, await collectData())
     if (url.pathname === '/api/topology') {
@@ -224,6 +275,9 @@ const server = http.createServer(async (req, res) => {
       const timer = setInterval(() => res.write(`event: ping\ndata: ${Date.now()}\n\n`), 15_000)
       req.on('close', () => clearInterval(timer))
       return
+    }
+    if (req.method === 'GET' && !url.pathname.startsWith('/api/')) {
+      if (await serveStatic(res, PUBLIC_DIR, url.pathname)) return
     }
     return send(res, 404, { ok: false, error: 'not found' })
   } catch (error) {
