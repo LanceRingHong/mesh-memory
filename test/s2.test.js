@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import test from 'node:test'
 import { makeSettings, writeMemoryFile, memoryDoc } from './helpers.js'
-import { acceptInbox, rejectInbox, undoDecision, batchInbox, attachSupport, listInbox, inboxRoot } from '../src/inbox.js'
+import { acceptInbox, rejectInbox, undoDecision, batchInbox, attachSupport, listInbox, inboxRoot, makeDraftTitle } from '../src/inbox.js'
 
 /** S2 审阅工作流：改后接受、撤销不覆盖人工编辑、批量、证据强度排序。 */
 
@@ -127,3 +127,21 @@ test('收件箱根目录落在 DSH_HOME 下，不进共享目录', async (t) => 
   t.after(cleanup)
   assert.equal(inboxRoot(settings), path.join(dshHome, 'dsh-mesh', 'inbox'))
 })
+
+test('标题不会在半截词处截断（S2 修）', () => {
+  // 逗号优先于硬截
+  assert.equal(
+    makeDraftTitle('在 Windows 上为 mesh-memory 构建真实客户端工程，目录 D:\\dsh-mesh\\client（新建）'),
+    '在 Windows 上为 mesh-memory 构建真实客户端工程',
+  )
+  // 超长时在标点/词边界收尾，不留半截词\n  const persona = makeDraftTitle('你是产品调研员。请用 web_search 和 web_fetch 调研主流记忆系统的图形界面，重点是界面长什么样。')\n  assert.ok(persona.length <= 36, persona)\n  assert.ok(/[。，]$|…$/.test(persona), persona)
+  // 短句原样返回
+  assert.equal(makeDraftTitle('整理交接文档'), '整理交接文档')
+  // 完全没标点时兜底加省略号
+  const long = makeDraftTitle('abcdefghijklmnopqrstuvwxyz0123456789abcdef')
+  assert.ok(long.endsWith('…'))
+  // 去掉 markdown 噪音
+  assert.equal(makeDraftTitle('## 用户诉求\n\n- 做一件事'), '做一件事')
+})
+
+

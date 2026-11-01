@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
-import { parseFrontmatter, writeFileAtomic, writeNote, safeRel, readInside, trashNote } from './store.js'
+import { parseFrontmatter, writeFileAtomic, writeNote, safeRel, readInside, trashNote, renderNote } from './store.js'
 import { stamp } from './config.js'
 
 /**
@@ -32,16 +32,44 @@ export async function writeSessionDraft(settings, buffer) {
   return { path: path.relative(inboxRoot(settings), file).replace(/\\/g, '/'), file }
 }
 
+/**
+ * 从用户第一句话生成标题：优先在句末（。！？）或逗号处断开，
+ * 避免出现"请用 web_searc"这种半截词。
+ */
+export function makeDraftTitle(text, max = 36) {
+  const flat = String(text || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`[^`\n]*`/g, ' ')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !/^#{1,6}\s/.test(line)) // 丢掉 "## 用户诉求" 这类小标题
+    .join(' ')
+    .replace(/[*_#>]/g, '')
+    .replace(/(^|\s)[-*+]\s+/g, ' ') // 列表符号
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!flat) return ''
+  // "你是产品调研员。" 这类开场白太短，单独当标题没信息量，跳到下一句取。
+  const afterPersona = flat.match(/^(.{1,12}?[。！？])\s*(.{6,})$/)
+  const body = afterPersona ? afterPersona[2].trim() : flat
+  if (body.length <= max) return body
+  const head = body.slice(0, max)
+  const end = Math.max(head.lastIndexOf('。'), head.lastIndexOf('！'), head.lastIndexOf('？'), head.lastIndexOf('. '))
+  if (end >= 8) return head.slice(0, end + 1)
+  const soft = Math.max(head.lastIndexOf('，'), head.lastIndexOf('、'), head.lastIndexOf('；'), head.lastIndexOf(','))
+  if (soft >= 12) return head.slice(0, soft)
+  return `${head.trimEnd().slice(0, max - 1)}…`
+}
+
 /** 机械摘要：不调模型，只把缓冲区里确定的事实写成可读的一段。 */
-export function renderSessionDraft(buffer, settings, now = new Date()) {
-  const messages = Array.isArray(buffer.messages) ? buffer.messages : []
+export function renderSessionDraft(buffer, settings, now = new Date()) {  const messages = Array.isArray(buffer.messages) ? buffer.messages : []
   const firstUser = messages.find((item) => item.role === 'user')?.text || ''
   const lastAssistant = [...messages].reverse().find((item) => item.role === 'assistant')?.text || ''
   const tools = [...(buffer.tools?.keys?.() ?? [])].sort()
   const files = [...(buffer.files ?? [])].slice(0, 30)
   const created = new Date(buffer.startedAt || Date.now()).toISOString()
   const updated = new Date(buffer.updatedAt || now.getTime()).toISOString()
-  const fallbackTitle = firstUser ? firstUser.replace(/\s+/g, ' ').trim().slice(0, 30) : ''
+  const fallbackTitle = makeDraftTitle(firstUser)
   const title = String(buffer.title || '').trim() || fallbackTitle || `会话 ${String(buffer.id || '').slice(0, 16)}`
 
   const clip = (text, max) => {
@@ -312,6 +340,38 @@ async function moveToArchive(settings, file, bucket) {
   const dest = path.join(dir, name)
   await fs.rename(file, dest)
   return path.relative(root, dest).replace(/\\/g, '/')
+}
+
+/**
+ * 一次性重算既有草稿的标题（旧草稿是按"前 30 字硬截"写进去的，会出现半截词）。
+ * 只改 frontmatter 的 title，不动正文。
+ */
+export async function retitleDrafts(settings) {
+  const dir = sessionDir(settings)
+  let entries = []
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true })
+  } catch {
+    return { updated: 0 }
+  }
+  let updated = 0
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.md') || entry.name.startsWith('.')) continue
+    const file = path.join(dir, entry.name)
+    let parsed
+    try {
+      parsed = parseFrontmatter(await fs.readFile(file, 'utf8'))
+    } catch {
+      continue
+    }
+    const body = String(parsed.body || '')
+    const section = body.match(/##\s*用户诉求\s*\n+([\s\S]*?)(?=\n##\s|$)/)
+    const next = makeDraftTitle(section ? section[1] : '')
+    if (!next || next === String(parsed.attrs.title || '')) continue
+    await writeFileAtomic(file, renderNote({ ...parsed.attrs, title: next }, body))
+    updated += 1
+  }
+  return { updated }
 }
 
 /** 收件箱非空时给出一行简短提醒（供系统提示使用）。 */
