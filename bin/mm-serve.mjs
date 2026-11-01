@@ -12,7 +12,7 @@ import { createTask, cancelTask } from '../src/tasks.js'
 import { writeProfile, ensureCollectionDirs } from '../src/profile.js'
 import { buildLinkGraph } from '../src/links.js'
 import { listTasks, taskSummary } from '../src/tasks.js'
-import { listInbox, readInbox } from '../src/inbox.js'
+import { listInbox, readInbox, attachSupport, undoDecision, batchInbox } from '../src/inbox.js'
 import { doctor } from '../src/maintenance.js'
 import { readProfile, ensureProfile } from '../src/profile.js'
 import { collectionCounts, queryMemory, statusCounts } from '../src/query.js'
@@ -113,7 +113,10 @@ async function collectData() {
     })
   }
   memories.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
-  const inbox = await listInbox(settings)
+  // 证据强度：与现有记忆重合多的草稿排前面（明显的重复先处理）。
+  const inbox = attachSupport(await listInbox(settings), memories).sort(
+    (a, b) => (b.support || 0) - (a.support || 0) || (b.mtimeMs || 0) - (a.mtimeMs || 0),
+  )
   for (const item of inbox) {
     try {
       item.body = String(parseFrontmatter(await readInbox(settings, item.path)).body || '').slice(0, 4000)
@@ -270,11 +273,35 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && url.pathname === '/api/inbox/accept') {
       const body = await readJson(req)
-      return send(res, 200, { ok: true, ...(await acceptInbox(settings, body.path, { kind: body.kind, title: body.title, description: body.description })) })
+      return send(res, 200, {
+        ok: true,
+        ...(await acceptInbox(settings, body.path, {
+          kind: body.kind,
+          title: body.title,
+          description: body.description,
+          body: typeof body.body === 'string' ? body.body : undefined,
+        })),
+      })
     }
     if (req.method === 'POST' && url.pathname === '/api/inbox/reject') {
       const body = await readJson(req)
       return send(res, 200, { ok: true, ...(await rejectInbox(settings, body.path)) })
+    }
+    if (req.method === 'POST' && url.pathname === '/api/inbox/undo') {
+      const body = await readJson(req)
+      try {
+        return send(res, 200, { ok: true, ...(await undoDecision(settings, body.id)) })
+      } catch (error) {
+        return send(res, 400, { ok: false, error: String(error?.message || error) })
+      }
+    }
+    if (req.method === 'POST' && url.pathname === '/api/inbox/batch') {
+      const body = await readJson(req)
+      const result = await batchInbox(settings, body.paths, {
+        action: body.action === 'reject' ? 'reject' : 'accept',
+        kind: body.kind || 'notes',
+      })
+      return send(res, 200, { ok: true, ...result })
     }
     if (req.method === 'POST' && url.pathname === '/api/tasks') {
       const body = await readJson(req)

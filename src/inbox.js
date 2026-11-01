@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { randomBytes } from 'node:crypto'
-import { parseFrontmatter, writeFileAtomic, writeNote, safeRel, readInside } from './store.js'
+import { createHash, randomBytes } from 'node:crypto'
+import { parseFrontmatter, writeFileAtomic, writeNote, safeRel, readInside, trashNote } from './store.js'
 import { stamp } from './config.js'
 
 /**
@@ -131,40 +131,187 @@ export async function readInbox(settings, rel) {
   return await readInside({ memoryDir: root, maxFileBytes: 2_000_000 }, path.relative(root, file).replace(/\\/g, '/'))
 }
 
-export async function acceptInbox(settings, rel, { kind = 'notes', title, description } = {}) {
+export async function acceptInbox(settings, rel, { kind = 'notes', title, description, body } = {}) {
   const root = inboxRoot(settings)
   const file = resolveInboxPath(settings, rel)
   const text = await readInside({ memoryDir: root, maxFileBytes: 2_000_000 }, path.relative(root, file).replace(/\\/g, '/'))
   const parsed = parseFrontmatter(text)
   const finalTitle = String(title || parsed.attrs.title || '会话摘要').slice(0, 120)
   const finalDescription = String(description || `自动记录的会话摘要（${parsed.attrs.turns || 0} 轮）`).slice(0, 240)
+  // 「改后接受」：body 传了就用改过的正文，否则用草稿原文。
+  const content = String(body ?? parsed.body).trim()
   const memory = await writeNote(settings, {
     kind,
     memoryType: 'reference',
     title: finalTitle,
     description: finalDescription,
-    content: parsed.body.trim(),
+    content,
     tags: ['auto-capture', 'session'],
     device: settings.deviceName,
     agent: settings.agentName,
     source: `session:${parsed.attrs.sessionId || 'unknown'}`,
   })
-  await moveToArchive(settings, file, 'accepted')
+  const memoryRel = path.relative(settings.memoryDir, memory).replace(/\\/g, '/')
+  const archived = await moveToArchive(settings, file, 'accepted')
+  const undoId = `${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`
+  await writeDecision(settings, {
+    id: undoId,
+    action: 'accept',
+    at: new Date().toISOString(),
+    draft: rel,
+    memory: memoryRel,
+    archivePath: archived,
+    checksum: String(parseFrontmatter(await fs.readFile(memory, 'utf8')).attrs.checksum || ''),
+    bodyHash: hashBody(content),
+    edited: body !== undefined,
+  })
   await maybeSummarize(settings)
-  return { memory: path.relative(settings.memoryDir, memory).replace(/\\/g, '/'), accepted: rel }
+  return { memory: memoryRel, accepted: rel, undoId }
 }
 
 export async function rejectInbox(settings, rel) {
   const file = resolveInboxPath(settings, rel)
-  await moveToArchive(settings, file, 'rejected')
-  return { rejected: rel }
+  const archived = await moveToArchive(settings, file, 'rejected')
+  const undoId = `${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`
+  await writeDecision(settings, {
+    id: undoId,
+    action: 'reject',
+    at: new Date().toISOString(),
+    draft: rel,
+    memory: '',
+    archivePath: archived,
+    checksum: '',
+    edited: false,
+  })
+  return { rejected: rel, undoId }
 }
 
+/**
+ * 撤销一次「接受」或「忽略」：
+ * - 接受 → 目标记忆**没被改过**才回退（否则拒绝，避免覆盖人工编辑）；草稿回到 sessions/；
+ * - 忽略 → 草稿从 rejected/ 搬回 sessions/。
+ */
+export async function undoDecision(settings, id) {
+  const file = decisionPath(settings, id)
+  let record
+  try {
+    record = JSON.parse(await fs.readFile(file, 'utf8'))
+  } catch {
+    throw new Error('找不到这条撤销记录（可能已撤销或已过期）')
+  }
+  if (record.action === 'accept') {
+    if (!record.memory) throw new Error('记录里没有目标记忆，无法撤销')
+    const abs = path.join(settings.memoryDir, record.memory)
+    let currentBody = null
+    try {
+      currentBody = String(parseFrontmatter(await fs.readFile(abs, 'utf8')).body || '')
+    } catch {
+      throw new Error('目标记忆已不存在（可能被删除），无法撤销')
+    }
+    // 用正文哈希判断"接受后有没有人改过"：外部编辑器不重算 frontmatter checksum 也能发现。
+    if (record.bodyHash && hashBody(currentBody) !== record.bodyHash) {
+      throw new Error('这条记忆在接受之后被改过；撤销会覆盖人工编辑，已拒绝。请手动处理。')
+    }
+    await trashNote(settings, record.memory)
+  }
+  // 把归档的草稿搬回 sessions/
+  if (record.archivePath) {
+    const archived = path.join(inboxRoot(settings), record.archivePath)
+    const draftFile = resolveInboxPath(settings, record.draft)
+    await fs.mkdir(path.dirname(draftFile), { recursive: true })
+    try {
+      await fs.rename(archived, draftFile)
+    } catch (error) {
+      throw new Error(`草稿回滚失败：${error?.message || error}`)
+    }
+  }
+  await fs.rm(file, { force: true })
+  return { undone: record.action, draft: record.draft, memory: record.memory }
+}
+
+/** 批量：逐条执行，返回每条的结果，不因单条失败中断整批。 */
+export async function batchInbox(settings, rels, { action = 'accept', kind = 'notes' } = {}) {
+  const list = Array.isArray(rels) ? rels.filter((rel) => typeof rel === 'string').slice(0, 100) : []
+  const done = []
+  for (const rel of list) {
+    try {
+      const result = action === 'reject' ? await rejectInbox(settings, rel) : await acceptInbox(settings, rel, { kind })
+      done.push({ rel, ok: true, ...result })
+    } catch (error) {
+      done.push({ rel, ok: false, error: String(error?.message || error) })
+    }
+  }
+  return { action, total: list.length, ok: done.filter((item) => item.ok).length, items: done }
+}
+
+function decisionsDir(settings) {
+  return path.join(inboxRoot(settings), 'decisions')
+}
+
+function decisionPath(settings, id) {
+  const safe = String(id || '').replace(/[^A-Za-z0-9-]/g, '')
+  if (!safe) throw new Error('id 非法')
+  return path.join(decisionsDir(settings), `${safe}.json`)
+}
+
+async function writeDecision(settings, record) {
+  const file = decisionPath(settings, record.id)
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  await writeFileAtomic(file, `${JSON.stringify(record, null, 2)}\n`)
+  return file
+}
+
+function tokensOf(text) {
+  const set = new Set()
+  for (const part of String(text || '').toLowerCase().match(/[a-z0-9_]{2,}|[\u4e00-\u9fff]+/g) || []) {
+    if (/^[a-z0-9_]+$/.test(part)) {
+      if (part.length >= 3) set.add(part)
+      continue
+    }
+    if (part.length === 1) continue
+    // 中文按 bigram 切，和召回同口径：整串比不了，2 字窗口才比得了。
+    for (let i = 0; i + 1 < part.length; i += 1) set.add(part.slice(i, i + 2))
+  }
+  return set
+}
+
+function hashBody(body) {
+  return createHash('sha256').update(String(body || '').trim()).digest('hex').slice(0, 16)
+}
+
+/**
+ * 给待确认条目算"证据强度"：与现有记忆的标题/描述有多少词重合。
+ * 用来把"明显重复"的草稿排到前面，而不是一味按时间倒序。
+ */
+export function attachSupport(items, memories = []) {
+  const corpus = memories.map((item) => ({
+    path: String(item.path || ''),
+    title: String(item.title || ''),
+    tokens: tokensOf(`${item.title || ''} ${item.description || ''}`),
+  }))
+  return items.map((item) => {
+    const mine = tokensOf(item.title)
+    const related = []
+    for (const doc of corpus) {
+      if (!doc.tokens.size || !mine.size) continue
+      let hits = 0
+      for (const token of mine) if (doc.tokens.has(token)) hits += 1
+      if (hits >= 2) related.push({ path: doc.path, title: doc.title, hits })
+    }
+    related.sort((a, b) => b.hits - a.hits)
+    return { ...item, support: related.length, related: related.slice(0, 3) }
+  })
+}
+
+/** 把草稿移进 accepted/ 或 rejected/，返回相对 inboxRoot 的路径（撤销时凭它找回）。 */
 async function moveToArchive(settings, file, bucket) {
+  const root = inboxRoot(settings)
   const dir = archiveDir(settings, bucket)
   await fs.mkdir(dir, { recursive: true })
   const name = `${stamp()}-${randomBytes(3).toString('hex')}-${path.basename(file)}`
-  await fs.rename(file, path.join(dir, name))
+  const dest = path.join(dir, name)
+  await fs.rename(file, dest)
+  return path.relative(root, dest).replace(/\\/g, '/')
 }
 
 /** 收件箱非空时给出一行简短提醒（供系统提示使用）。 */
