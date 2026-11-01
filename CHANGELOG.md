@@ -1,3 +1,10 @@
+## 0.23.2 — 2026-11-01
+
+图谱修复（用户反馈）。
+
+- **三个滑块没反应**：`strokeWidth` / `fontSize` 是 SVG 表现属性，被 CSS（`.graph-edge{stroke-width:1.2}`、`.graph-node text{font-size:11px}`）覆盖；改为内联 `style`。节点半径还漏了 `cfg.nodeScale` 依赖，补上。
+- **浅色节点边框太粗太黑**：描边原来固定深色 1.5px；浅色下改为白色 1.1px（选中时 2px 强调色），连线同时调浅（`#d7dfec`）。
+- **删掉「按分类 / 时间轴」布局**：实现有缺陷（同类节点互相压字），实用性也低，只保留力导向。
 ## 0.23.1 — 2026-11-01
 
 图谱两处改进。
@@ -435,6 +442,7 @@ P1 自主生长 + P2 互通。
 ## 0.1.0 — 2026-10-31
 
 - Initial MVP: shared memory, 13 `mesh_*` tools, Remote delegation, file transfer.
+
 
 
 
