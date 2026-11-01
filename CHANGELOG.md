@@ -1,3 +1,23 @@
+## 0.24.0 — 2026-11-01
+
+S2 收尾：去重合并、冲突并排裁决、定时反思；入口进应用（任务 B）。
+
+### 入口（B）
+- **`conversation.view` 改为内嵌 Web 客户端**（`/dsh-mesh/app/` iframe），侧栏「记忆」按钮打开同一页面的浮层。旧的三页签 explorer（会话/记忆/备份，约 600 行）删除——不再维护两套 UI。
+- **宿主托管 serve**：新增 `src/serve-host.js`，插件加载时探测 `127.0.0.1:8767/api/health`，没起就自动拉起 `bin/mm-serve.mjs`（Electron 宿主自动加 `ELECTRON_RUN_AS_NODE`），退出时只杀自己拉起的进程。新配置 `servePort`（默认 8767）、`serveAutostart`（默认 true）。
+- 离线兜底：serve 没起来时 `conversation.view` 显示「记忆服务还没起来」+ 重试 / 新窗口打开，而不是白屏。
+
+### 整理（C）
+- **去重/合并界面**：新视图「整理」；`GET /api/duplicates`、`POST /api/duplicates/resolve`。保留一条、其余 `archive`（archived 状态，可在共享库 unarchive，不物理删）。
+- **冲突并排裁决**：`GET /api/conflicts`、`GET /api/conflicts/diff`、`POST /api/conflicts/resolve`；左右两栏对比「本机 / 副本」，一键采用任一侧，副本进 `.trash/`。新增 `src/conflicts.js`（基名解析 + 配对 + 裁决，含路径越界校验）。
+- **定时反思**：新增 `src/maintenance-log.js`；serve 每 `MESH_REFLECT_HOURS`（默认 6）小时跑一次 doctor + duplicates + reflect，结果写 `$DSH_HOME/dsh-memory/maintenance.json` 与 `reports/maintenance-*.md`（保留 30 份）。接口 `GET /api/maintenance`、`POST /api/maintenance/run`；「整理」页可看上次结果并立即运行。
+
+### 测试
+- 新增 `test/conflicts.test.js`（4 例）、`test/maintenance-log.test.js`（3 例）、`test/serve-host.test.js`（4 例）。
+- `npm run check` 覆盖新增模块。
+
+### 注意
+- 旧 `client.js` 的 Markdown 渲染/sanitizer 随 explorer 一起删除；客户端渲染由 Web 端负责。
 ## 0.23.2 — 2026-11-01
 
 图谱修复（用户反馈）。
@@ -442,6 +462,7 @@ P1 自主生长 + P2 互通。
 ## 0.1.0 — 2026-10-31
 
 - Initial MVP: shared memory, 13 `mesh_*` tools, Remote delegation, file transfer.
+
 
 
 

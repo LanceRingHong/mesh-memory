@@ -16,6 +16,7 @@ import { snapshot } from './src/backup.js'
 import { loadSkillPack, registerSkillPack } from './src/skills.js'
 import { registerBriefing } from './src/briefing.js'
 import { runMaintenance } from './src/maintenance.js'
+import { ensureServe } from './src/serve-host.js'
 
 export const name = 'dsh-mesh'
 
@@ -42,6 +43,8 @@ export const Config = Schema.object({
     .default([])
     .description('允许 mesh_send_file 上传的本机目录；留空时默认共享记忆目录 + 用户 Downloads。'),
   dashboardToken: Schema.string().default('').description('只读页面访问 token；留空表示不校验（仍只绑定 127.0.0.1）。'),
+  servePort: Schema.number().default(8767).description('Web 客户端（mm-serve）端口；conversation.view 内嵌的就是它。'),
+  serveAutostart: Schema.boolean().default(true).description('插件加载时自动探测并拉起 mm-serve（关闭后需自己 npm run serve）。'),
   maxSkillBytes: Schema.number().default(2000000).description('单个共享 skill 目录的大小上限（字节）。'),
   captureEnabled: Schema.boolean().default(true).description('自动记录会话：把完成的会话写成本机收件箱草稿（不同步、不召回）。'),
   captureIdleMinutes: Schema.number().default(5).description('会话空闲多少分钟后生成草稿。'),
@@ -166,6 +169,22 @@ export function apply(ctx, config = {}) {
     maintenanceTimer.unref?.()
   }
 
+  // 客户端 REST 服务（0.24.0）：conversation.view 内嵌 /dsh-mesh/app/，没有 serve 就是空白。
+  // 后台探测/拉起，失败只记录，不影响宿主启动。
+  let serveHandle = null
+  Promise.resolve()
+    .then(async () => {
+      serveHandle = await ensureServe(settings, { port: settings.servePort, autostart: settings.serveAutostart })
+      if (serveHandle.started) {
+        console.info(
+          serveHandle.ready
+            ? `[dsh-mesh] mm-serve started on 127.0.0.1:${serveHandle.port}`
+            : `[dsh-mesh] mm-serve 启动未就绪（127.0.0.1:${serveHandle.port}），界面会显示离线提示`,
+        )
+      }
+    })
+    .catch((error) => console.warn('[dsh-mesh] ensureServe failed:', error?.message || error))
+
   // 初始化与 AGENTS 物化放在后台，避免拖慢宿主启动；失败只记录，不影响宿主。
   Promise.resolve()
     .then(async () => {
@@ -210,6 +229,10 @@ export function apply(ctx, config = {}) {
       } catch {}
       try {
         disposeCommands?.()
+      } catch {}
+      // 只杀自己拉起的 serve；外部已在跑的不动。
+      try {
+        serveHandle?.stop?.()
       } catch {}
       if (backupTimer) clearInterval(backupTimer)
       if (maintenanceTimer) clearInterval(maintenanceTimer)

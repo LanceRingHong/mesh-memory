@@ -69,6 +69,9 @@ export function settingsOf(config = {}) {
     allowedUploadRoots: configuredRoots.length ? configuredRoots : defaultUploadRoots(memoryDir),
     // 只读页面 token（P2-7）：留空表示不校验（仍只绑定 127.0.0.1）。
     dashboardToken: String(config.dashboardToken || '').trim(),
+    // 客户端 REST 服务（mm-serve）：插件加载时自动探测/拉起，见 src/serve-host.js（0.24.0）。
+    servePort: clamp(config.servePort, 1024, 65535, 8767),
+    serveAutostart: config.serveAutostart !== false,
     // skills 同步上限（P2-6）：超过则跳过，避免同步目录塞进巨型技能。
     maxSkillBytes: clamp(config.maxSkillBytes, 100_000, 20_000_000, 2_000_000),
     // 自动记录（方案 A P1）：会话事件 → 本机收件箱草稿，默认开启、不写共享目录。

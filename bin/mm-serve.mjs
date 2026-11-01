@@ -14,7 +14,9 @@ import { buildLinkGraph, extractLinks } from '../src/links.js'
 import { indexStats, searchIndex, syncIndex, clearIndex } from '../src/indexdb.js'
 import { listTasks, taskSummary } from '../src/tasks.js'
 import { listInbox, readInbox, attachSupport, undoDecision, batchInbox } from '../src/inbox.js'
-import { doctor } from '../src/maintenance.js'
+import { doctor, duplicates, reflectBrief } from '../src/maintenance.js'
+import { runMaintenance, readMaintenanceState, maintenancePaths, DEFAULT_REFLECT_HOURS } from '../src/maintenance-log.js'
+import { listConflictPairs, pairConflict, resolveConflict } from '../src/conflicts.js'
 import { readProfile, ensureProfile } from '../src/profile.js'
 import { collectionCounts, queryMemory, statusCounts } from '../src/query.js'
 import { explainRecall } from '../src/recall.js'
@@ -50,7 +52,37 @@ syncIndex(settings, indexDeps)
   .then((result) => console.info(`[mesh-memory] index synced ${JSON.stringify(result)}`))
   .catch((error) => console.warn(`[mesh-memory] index sync failed: ${error?.message || error}`))
 
+/* ------------------ 定时反思 / 体检（0.24.0） ------------------ */
 
+const REFLECT_HOURS = Number(process.env.MESH_REFLECT_HOURS ?? DEFAULT_REFLECT_HOURS)
+let maintenanceRunning = null
+
+/** 定时器与手动按钮可能撞车：串行化，共用同一个 promise。 */
+function runMaintenanceSerialized(reason) {
+  if (maintenanceRunning) return maintenanceRunning
+  maintenanceRunning = runMaintenance(settings, { reason }).finally(() => {
+    maintenanceRunning = null
+  })
+  return maintenanceRunning
+}
+
+function scheduleMaintenance() {
+  if (!Number.isFinite(REFLECT_HOURS) || REFLECT_HOURS <= 0) {
+    console.info('[mesh-memory] 定时反思已关闭（MESH_REFLECT_HOURS<=0）')
+    return
+  }
+  const tick = () => {
+    runMaintenanceSerialized('scheduled').catch((error) =>
+      console.warn(`[mesh-memory] 定时反思失败：${error?.message || error}`),
+    )
+  }
+  // 启动 45 秒后先跑一次（避开启动时的索引高峰），之后按间隔跑。
+  setTimeout(tick, 45_000).unref?.()
+  setInterval(tick, REFLECT_HOURS * 3600_000).unref?.()
+  console.info(`[mesh-memory] 定时反思：每 ${REFLECT_HOURS} 小时`)
+}
+
+scheduleMaintenance()
 /* ------------------ 活动流：文件变化 + SSE 推送 ------------------ */
 
 const activity = []
@@ -181,6 +213,16 @@ async function collectData() {
 }
 
 function send(res, code, body, type = 'application/json; charset=utf-8') {
+  // 先序列化再写头：JSON.stringify 抛错（循环引用/大对象）时不能已经发过头，
+  // 否则 catch 里再 send 会触发 ERR_HTTP_HEADERS_SENT 把整个 serve 打死（0.24.0 修）。
+  const payload = type.startsWith('application/json') ? JSON.stringify(body ?? null) : String(body ?? '')
+  if (res.writableEnded) return
+  if (res.headersSent) {
+    try {
+      res.end(payload)
+    } catch {}
+    return
+  }
   res.writeHead(code, {
     'Content-Type': type,
     'Access-Control-Allow-Origin': '*',
@@ -188,7 +230,7 @@ function send(res, code, body, type = 'application/json; charset=utf-8') {
     'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
     'Cache-Control': 'no-store',
   })
-  res.end(type.startsWith('application/json') ? JSON.stringify(body) : String(body))
+  res.end(payload)
 }
 
 const MIME = {
@@ -340,6 +382,63 @@ const server = http.createServer(async (req, res) => {
       await ensureCollectionDirs(settings, profile)
       return send(res, 200, { ok: true, profile })
     }
+    if (req.method === 'POST' && url.pathname === '/api/duplicates/resolve') {
+      const body = await readJson(req)
+      const keep = String(body.keep || '')
+      const archive = Array.isArray(body.archive) ? body.archive.map(String) : []
+      const archived = []
+      const failed = []
+      for (const rel of archive) {
+        if (!rel || rel === keep) continue
+        try {
+          await archiveNote(settings, rel, { confirm: true })
+          archived.push(rel)
+        } catch (error) {
+          failed.push({ path: rel, error: String(error?.message || error) })
+        }
+      }
+      await syncIndex(settings, indexDeps).catch(() => {})
+      return send(res, 200, { ok: failed.length === 0, keep, archived, failed })
+    }
+    if (req.method === 'POST' && url.pathname === '/api/conflicts/resolve') {
+      const body = await readJson(req)
+      try {
+        const result = await resolveConflict(settings, String(body.path || ''), body.take === 'conflict' ? 'conflict' : 'base')
+        await syncIndex(settings, indexDeps).catch(() => {})
+        return send(res, 200, result)
+      } catch (error) {
+        return send(res, 400, { ok: false, error: String(error?.message || error) })
+      }
+    }
+    if (req.method === 'POST' && url.pathname === '/api/maintenance/run') {
+      const entry = await runMaintenanceSerialized('manual')
+      return send(res, 200, { ok: true, last: entry })
+    }
+    if (url.pathname === '/api/duplicates') {
+      return send(res, 200, { ...(await duplicates(settings)) })
+    }
+    if (url.pathname === '/api/conflicts') {
+      return send(res, 200, { ok: true, items: await listConflictPairs(settings) })
+    }
+    if (url.pathname === '/api/conflicts/diff') {
+      const target = url.searchParams.get('path') || ''
+      try {
+        return send(res, 200, { ok: true, ...(await pairConflict(settings, target)) })
+      } catch (error) {
+        return send(res, 400, { ok: false, error: String(error?.message || error) })
+      }
+    }
+    if (url.pathname === '/api/maintenance') {
+      const state = await readMaintenanceState(settings)
+      return send(res, 200, {
+        ok: true,
+        enabled: Number.isFinite(REFLECT_HOURS) && REFLECT_HOURS > 0,
+        intervalHours: REFLECT_HOURS,
+        last: state.last || null,
+        runs: (state.runs || []).slice(0, 10),
+        reports: maintenancePaths(settings).reportDir,
+      })
+    }
     if (url.pathname === '/api/health') {
       return send(res, 200, { ok: true, version: PKG_VERSION, device: settings.deviceName, agent: settings.agentName })
     }
@@ -432,6 +531,13 @@ const server = http.createServer(async (req, res) => {
     }
     return send(res, 404, { ok: false, error: 'not found' })
   } catch (error) {
+    console.error(`[mesh-memory] ${req.method} ${url.pathname} failed: ${error?.stack || error}`)
+    if (res.headersSent) {
+      try {
+        res.end()
+      } catch {}
+      return
+    }
     return send(res, 500, { ok: false, error: String(error?.message || error) })
   }
 })
