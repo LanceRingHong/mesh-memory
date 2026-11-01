@@ -26,7 +26,7 @@ const NOTE_SCHEMA = 2
 
 /** v2 frontmatter 的固定字段顺序；三处写入（write/update/migrate）共用。 */
 export const NOTE_ORDER = [
-  'schema', 'id', 'permalink', 'title', 'kind', 'memoryType', 'description',
+  'schema', 'id', 'permalink', 'title', 'kind', 'memoryType', 'status', 'description',
   'device', 'agent', 'source', 'createdAt', 'updatedAt', 'checksum',
   'tags', 'aliases', 'baseline', 'baselinePriority', 'validAt', 'invalidAt', 'supersededBy',
 ]
@@ -44,6 +44,7 @@ function parseDate(value) {
  * - 时间无法解析时保留并告警，不静默丢数据。
  */
 export function isDocValid(attrs = {}, at = Date.now()) {
+  if (attrs.status === 'archived' || attrs.status === 'superseded' || attrs.status === 'draft') return false
   if (attrs.supersededBy) return false
   const invalidAt = parseDate(attrs.invalidAt)
   if (Number.isNaN(invalidAt)) console.warn('[dsh-mesh] invalidAt 无法解析，已忽略该限制:', attrs.invalidAt)
@@ -326,6 +327,7 @@ export async function updateNote(settings, rel, patch = {}) {
   if (!attrs.createdAt) attrs.createdAt = now
   if (!attrs.device) attrs.device = settings.deviceName
   if (!attrs.agent) attrs.agent = settings.agentName || 'dsh'
+  if (!attrs.status) attrs.status = 'active'
   if (!attrs.source) attrs.source = 'manual'
   attrs.updatedAt = now
 
@@ -512,6 +514,7 @@ export async function writeNote(settings, {
     title: safeTitle,
     kind: k,
     memoryType: type,
+    status: 'active',
     description: String(description || '').trim().slice(0, 240) || defaultDescription(content),
     device: device || settings.deviceName,
     agent: agent || settings.agentName || 'dsh',

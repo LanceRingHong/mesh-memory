@@ -2,8 +2,12 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { settingsOf } from '../src/config.js'
-import { ensureLayout, writeNote, searchMemory, readMemory, recentFiles, counts, parseFrontmatter } from '../src/store.js'
+import { ensureLayout, writeNote, searchMemory, readMemory, recentFiles, counts, parseFrontmatter, listDevices } from '../src/store.js'
 import { doctor, duplicates, reflectBrief, onboardBlueprint, applyOnboarding } from '../src/maintenance.js'
+import { queryMemory, statusCounts } from '../src/query.js'
+import { archiveNote, unarchiveNote } from '../src/lifecycle.js'
+import { contextFor, buildLinkGraph } from '../src/links.js'
+import { listTasks, taskSummary } from '../src/tasks.js'
 
 const argv = process.argv.slice(2)
 const cmd = argv[0] || 'help'
@@ -106,13 +110,81 @@ switch (cmd) {
   }
   case 'context': {
     const query = positional.join(' ')
-    if (!query) fail('用法：mm context <主题>')
-    const rows = await searchMemory(settings, query, Number(flags.limit) || 5)
-    for (const row of rows.slice(0, 5)) {
-      const raw = await readMemory(settings, row.path).catch(() => '')
-      const parsed = parseFrontmatter(raw)
-      console.log(`\n## ${parsed.attrs.title || row.path}\n${row.path}\n\n${String(parsed.body || '').slice(0, 1200)}`)
+    const ctx = await contextFor(settings, {
+      path: flags.path ? String(flags.path) : undefined,
+      query: query || undefined,
+      depth: Number(flags.depth) || 1,
+      limit: Number(flags.limit) || 8,
+    })
+    if (json) out(ctx)
+    else {
+      console.log(`${ctx.count} 条（种子 ${ctx.seeds.length}）`)
+      for (const item of ctx.items) {
+        console.log(`\n## [${item.relation}] ${item.title || item.path}\n${item.path}\n\n${item.excerpt.slice(0, 400)}`)
+      }
+      if (ctx.broken.length) console.log(`\n断链 ${ctx.broken.length} 条`)
     }
+    break
+  }
+  case 'query': {
+    const filters = {}
+    for (const [key, value] of Object.entries({
+      kind: flags.kind, memoryType: flags.type, status: flags.status,
+      device: flags.device, agent: flags.agent, tag: flags.tag, title: flags.title,
+      updatedAfter: flags.after, updatedBefore: flags.before,
+    })) {
+      if (value !== undefined && value !== true) filters[key] = String(value)
+    }
+    const result = await queryMemory(settings, filters, {
+      limit: Number(flags.limit) || 100,
+      includeInvalid: flags['include-invalid'] === true,
+    })
+    if (json) out(result)
+    else {
+      console.log(`${result.count} 条`)
+      for (const item of result.items) console.log(`- ${item.path}  [${item.status}] ${item.title}`)
+    }
+    break
+  }
+  case 'archive': {
+    const rel = positional[0]
+    if (!rel) fail('用法：mm archive <相对路径> --confirm')
+    if (flags.confirm !== true) fail('归档需要 --confirm（可 unarchive 恢复）')
+    out(await archiveNote(settings, rel, { confirm: true }))
+    break
+  }
+  case 'unarchive': {
+    const rel = positional[0]
+    if (!rel) fail('用法：mm unarchive <相对路径>')
+    out(await unarchiveNote(settings, rel))
+    break
+  }
+  case 'tasks': {
+    if (flags.summary === true) {
+      out(await taskSummary(settings))
+      break
+    }
+    const result = await listTasks(settings, { status: flags.status ? String(flags.status) : undefined, limit: Number(flags.limit) || 50 })
+    if (json) out(result)
+    else {
+      console.log(`${result.count} 个任务`)
+      for (const task of result.items) console.log(`- [${task.status}] ${task.id} ${task.title} → ${task.hostName || task.hostId || ''}`)
+    }
+    break
+  }
+  case 'topology': {
+    await ensureLayout(settings)
+    const [devices, c, statuses, tasks, graph] = await Promise.all([
+      listDevices(settings), counts(settings), statusCounts(settings), taskSummary(settings), buildLinkGraph(settings),
+    ])
+    out({
+      local: { device: settings.deviceName, agent: settings.agentName, memoryDir: settings.memoryDir },
+      counts: c,
+      statuses,
+      tasks,
+      graph: { nodes: graph.nodes.length, edges: graph.edges.length, broken: graph.broken.length },
+      devices: devices.map((d) => ({ name: d.name, deviceSlug: d.deviceSlug, hostId: d.hostId || '', platform: d.platform || '', lastSeen: d.lastSeen || '' })),
+    })
     break
   }
   case 'onboard': {
@@ -138,7 +210,12 @@ switch (cmd) {
   mm read <相对路径>        读取一条
   mm write --title ... --content ...
   mm recent [--kind facts]  最近更新
-  mm context <主题>         组装上下文
+  mm context <主题>         沿 wikilink 组装上下文
+  mm query --kind facts --tag x  按元数据过滤
+  mm archive <路径> --confirm     归档
+  mm unarchive <路径>             取消归档
+  mm tasks [--status running]     任务列表
+  mm topology                     设备/计数/图规模
   mm doctor                 体检
   mm duplicates             重复检测
   mm reflect [--days 7]     反思简报

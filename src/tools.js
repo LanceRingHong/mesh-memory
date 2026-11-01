@@ -16,6 +16,7 @@ import {
   restoreTrash,
   listConflicts,
   updateDevices,
+  listDevices,
 } from './store.js'
 import { materializeAgents, previewAgents, previewSkills, syncSkills } from './agents.js'
 import { resolveUploadPath } from './policy.js'
@@ -23,6 +24,10 @@ import { listInbox, readInbox, acceptInbox, rejectInbox } from './inbox.js'
 import { flushAllSessions, flushCurrent } from './capture.js'
 import { snapshot, listSnapshots, restoreSnapshot, scheduleSnapshot } from './backup.js'
 import { doctor, duplicates, reflectBrief, onboardBlueprint, applyOnboarding } from './maintenance.js'
+import { queryMemory, statusCounts } from './query.js'
+import { archiveNote, unarchiveNote } from './lifecycle.js'
+import { contextFor, buildLinkGraph } from './links.js'
+import { createTask, updateTask, listTasks, getTask, cancelTask, taskSummary } from './tasks.js'
 import {
   asObject,
   listHosts,
@@ -323,6 +328,84 @@ export function registerTools(ctx, settings) {
   })
 
   add({
+    name: 'mesh_memory_query',
+    description: '按 frontmatter 元数据过滤记忆（kind/memoryType/status/device/agent/tag/title/更新时间），不是全文检索。',
+    parameters: {
+      kind: str('目录分类 facts/decisions/projects/notes'),
+      memoryType: str('语义类型 user/feedback/project/reference'),
+      status: str('active/archived/superseded/draft'),
+      device: str('设备名'),
+      agent: str('agent 名'),
+      tag: str('单个标签'),
+      title: str('标题包含'),
+      updatedAfter: str('ISO 时间下限'),
+      updatedBefore: str('ISO 时间上限'),
+      includeInvalid: bool('包含失效/归档（默认 false）'),
+      limit: num('最多返回，默认 100'),
+    },
+    async execute(args) {
+      await ensureLayout(settings)
+      const filters = {}
+      for (const key of ['kind', 'memoryType', 'status', 'device', 'agent', 'tag', 'title', 'updatedAfter', 'updatedBefore']) {
+        if (args[key] !== undefined && args[key] !== '') filters[key] = args[key]
+      }
+      return json(await queryMemory(settings, filters, {
+        limit: clampInt(args.limit, 1, 500, 100),
+        includeInvalid: args.includeInvalid === true,
+      }))
+    },
+  })
+
+  add({
+    name: 'mesh_memory_context',
+    description: '围绕一条记忆或一个主题，沿 [[wikilink]] 取 1 跳上下文（种子 + 入链/出链），返回可读片段。',
+    parameters: {
+      path: str('种子文件相对路径（与 query 二选一）'),
+      query: str('主题词，用搜索选种子（与 path 二选一）'),
+      depth: num('1 或 2，默认 1'),
+      limit: num('最多条目，默认 8'),
+    },
+    async execute(args) {
+      await ensureLayout(settings)
+      if (!args.path && !args.query) throw new Error('path 或 query 至少给一个')
+      return json(await contextFor(settings, {
+        path: args.path,
+        query: args.query,
+        depth: clampInt(args.depth, 1, 2, 1),
+        limit: clampInt(args.limit, 1, 30, 8),
+      }))
+    },
+  })
+
+  add({
+    name: 'mesh_memory_archive',
+    description: '归档一条记忆（status=archived，不再参与搜索/召回；文件保留，可 unarchive）。',
+    parameters: {
+      path: str('相对 memoryDir 的路径', { required: true }),
+      confirm: bool('必须为 true：归档会把它移出搜索/召回'),
+    },
+    async execute(args) {
+      if (args.confirm !== true) throw new Error('归档需要 confirm:true')
+      await ensureLayout(settings)
+      const result = await archiveNote(settings, args.path, { confirm: true })
+      scheduleSnapshot(settings, 'memory:archive')
+      return json({ ok: true, ...result })
+    },
+  })
+
+  add({
+    name: 'mesh_memory_unarchive',
+    description: '恢复一条归档记忆（status=active，清掉归档时写入的 invalidAt）。',
+    parameters: { path: str('相对 memoryDir 的路径', { required: true }) },
+    async execute(args) {
+      await ensureLayout(settings)
+      const result = await unarchiveNote(settings, args.path)
+      scheduleSnapshot(settings, 'memory:unarchive')
+      return json({ ok: true, ...result })
+    },
+  })
+
+  add({
     name: 'mesh_memory_delete',
     description: '把一条记忆移入 .trash/（软删除，可恢复）。必须显式 confirm:true。',
     parameters: {
@@ -549,6 +632,165 @@ export function registerTools(ctx, settings) {
       await publishNativeManifest(settings).catch(() => {})
       scheduleSnapshot(settings, 'memory:digest')
       return json({ ok: true, path: relOf(settings, file) })
+    },
+  })
+
+  add({
+    name: 'mesh_task_create',
+    description: '创建一个跨设备任务记录（只登记，不执行）。任务文件在共享目录 tasks/<device>/ 下，其他设备可见。',
+    parameters: {
+      title: str('任务标题（默认取 prompt 前 200 字）'),
+      prompt: str('要执行的任务文本', { required: true }),
+      hostId: str('目标 Host id（可选，先登记后执行）'),
+      workspaceId: str('目标工作区 id（可选）'),
+      workspacePath: str('目标工作区路径/标题（可选）'),
+    },
+    async execute(args) {
+      await ensureLayout(settings)
+      const task = await createTask(settings, {
+        title: args.title || args.prompt,
+        prompt: args.prompt,
+        hostId: args.hostId,
+        workspaceId: args.workspaceId,
+        workspacePath: args.workspacePath,
+      })
+      return json({ ok: true, task })
+    },
+  })
+
+  add({
+    name: 'mesh_task_run',
+    description: '创建任务并委托执行：登记 → 调 mesh_run → 把状态/结果写回任务。running 不等于成功。',
+    parameters: {
+      hostId: str('目标 Host id', { required: true }),
+      task: str('要委托的任务文本', { required: true }),
+      title: str('任务标题（可选）'),
+      workspaceId: str('目标工作区 id（可选）'),
+      workspacePath: str('目标工作区路径/标题（可选）'),
+      waitMs: num('等待毫秒，默认 30000（1000-60000）'),
+      readMessages: num('读回消息条数，默认 20（1-50）'),
+    },
+    async execute(args, exec) {
+      await ensureLayout(settings)
+      const record = await createTask(settings, {
+        title: args.title || args.task,
+        prompt: args.task,
+        hostId: args.hostId,
+        workspaceId: args.workspaceId,
+        workspacePath: args.workspacePath,
+      })
+      await updateTask(settings, record.id, { status: 'running' })
+      try {
+        const result = await runOnHost(ctx, exec, {
+          hostId: args.hostId,
+          workspaceId: args.workspaceId,
+          workspacePath: args.workspacePath,
+          task: args.task,
+          waitMs: clampInt(args.waitMs, 1000, 60000, 30000),
+          readMessages: clampInt(args.readMessages, 1, 50, 20),
+        })
+        const completion = completionOf(result.status)
+        const status = completion.finished ? (completion.failed ? 'failed' : 'done') : 'running'
+        const task = await updateTask(settings, record.id, {
+          status,
+          sessionId: result.sessionId || '',
+          workspaceId: result.workspaceId || '',
+          result: {
+            ok: result.ok === true,
+            finished: result.finished === true,
+            remoteStatus: result.status || '',
+            text: String(result.text || '').slice(0, 2000),
+          },
+          error: completion.failed ? String(result.text || '').slice(0, 500) : null,
+        })
+        return json({ ok: completion.finished && !completion.failed, task, result })
+      } catch (error) {
+        await updateTask(settings, record.id, { status: 'failed', error: String(error?.message || error) }).catch(() => {})
+        throw error
+      }
+    },
+  })
+
+  add({
+    name: 'mesh_task_list',
+    description: '列出任务（可按 status / hostId 过滤），按创建时间倒序。',
+    parameters: {
+      status: str('queued/running/done/failed/cancelled'),
+      hostId: str('按目标 Host 过滤'),
+      limit: num('最多返回，默认 50'),
+    },
+    async execute(args) {
+      await ensureLayout(settings)
+      return json(await listTasks(settings, {
+        status: args.status,
+        hostId: args.hostId,
+        limit: clampInt(args.limit, 1, 200, 50),
+      }))
+    },
+  })
+
+  add({
+    name: 'mesh_task_get',
+    description: '读取一个任务的状态、结果与会话 id。',
+    parameters: { id: str('任务 id', { required: true }) },
+    async execute(args) {
+      const task = await getTask(settings, args.id)
+      if (!task) throw new Error(`找不到任务：${args.id}`)
+      return json({ ok: true, task })
+    },
+  })
+
+  add({
+    name: 'mesh_task_cancel',
+    description: '取消任务记录；如果任务已有远端会话，会尝试中断它（不保证远端一定停）。',
+    parameters: { id: str('任务 id', { required: true }) },
+    async execute(args, exec) {
+      const task = await getTask(settings, args.id)
+      if (!task) throw new Error(`找不到任务：${args.id}`)
+      let interrupted = false
+      if (task.hostId && task.workspaceId && task.sessionId) {
+        try {
+          await interruptSession(ctx, exec, { hostId: task.hostId, workspaceId: task.workspaceId, sessionId: task.sessionId })
+          interrupted = true
+        } catch {}
+      }
+      const updated = await cancelTask(settings, args.id)
+      return json({ ok: true, interrupted, task: updated })
+    },
+  })
+
+  add({
+    name: 'mesh_topology',
+    description: '给界面用的拓扑快照：设备、计数、状态分布、任务、wikilink 图规模、收件箱。',
+    parameters: {},
+    async execute() {
+      await ensureLayout(settings)
+      const [devices, c, statuses, tasks, graph, inbox] = await Promise.all([
+        listDevices(settings),
+        counts(settings),
+        statusCounts(settings),
+        taskSummary(settings),
+        buildLinkGraph(settings),
+        listInbox(settings),
+      ])
+      return json({
+        ok: true,
+        generatedAt: new Date().toISOString(),
+        local: { device: settings.deviceName, deviceSlug: settings.deviceSlug, agent: settings.agentName, memoryDir: settings.memoryDir },
+        counts: { ...c, inbox: inbox.length },
+        statuses,
+        tasks,
+        graph: { nodes: graph.nodes.length, edges: graph.edges.length, broken: graph.broken.length },
+        devices: devices.map((item) => ({
+          name: item.name,
+          deviceSlug: item.deviceSlug,
+          platform: item.platform || '',
+          hostId: item.hostId || '',
+          role: item.role || '',
+          aliases: item.aliases || [],
+          lastSeen: item.lastSeen || '',
+        })),
+      })
     },
   })
 

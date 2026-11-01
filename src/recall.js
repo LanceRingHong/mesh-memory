@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { parseFrontmatter, isDocValid } from './store.js'
+import { extractLinks } from './links.js'
 
 const K1 = 1.2
 const B = 0.75
@@ -156,6 +157,7 @@ async function loadDocs(settings) {
       docs.push({
         path: row.rel,
         title,
+        permalink: String(parsed.attrs.permalink || ''),
         description,
         tags,
         aliases,
@@ -242,7 +244,25 @@ export async function buildRecall(settings, query) {
   // 绝对门槛（默认 0，可配）+ 相对门槛：低于最高分 20% 的命中不注入（P1-6）。
   const threshold = Math.max(Number(settings.recallMinScore) || 0, top * RELATIVE_FLOOR)
   const hits = ordered.filter((item) => item.specific && item.score >= threshold).slice(0, 4)
-  if (!baseline.length && !hits.length) {
+
+  // 沿 [[wikilink]] 补 1 跳关联（最多 2 条），让“顺藤摸瓜”不依赖 Agent 主动查。
+  const linked = []
+  if (hits.length) {
+    const seen = new Set([...baseline, ...hits.map((h) => h.doc)].map((doc) => doc.path))
+    outer: for (const hit of hits) {
+      for (const link of extractLinks(hit.chunk.text)) {
+        const key = link.toLowerCase()
+        const target = docs.find((doc) => doc.path !== hit.doc.path && (
+          (doc.permalink && doc.permalink.toLowerCase() === key) || doc.title.toLowerCase() === key
+        ))
+        if (!target || seen.has(target.path)) continue
+        seen.add(target.path)
+        linked.push(target)
+        if (linked.length >= 2) break outer
+      }
+    }
+  }
+  if (!baseline.length && !hits.length && !linked.length) {
     return { text: '', files: [], baseline: 0, hits: 0, truncated: loaded.truncated, candidates: loaded.total }
   }
 
@@ -256,6 +276,9 @@ export async function buildRecall(settings, query) {
   for (const { doc, chunk } of hits) {
     lines.push(`### ${doc.path}`, `描述：${doc.description || doc.title}`, excerpt(chunk.text, 900))
   }
+  for (const doc of linked) {
+    lines.push(`### ${doc.path}`, `描述：${doc.description || doc.title}（关联）`, excerpt(doc.chunks[0]?.text || '', 500))
+  }
   if (loaded.truncated) {
     lines.push(
       `（候选已截断：共 ${loaded.total} 个记忆文件，只扫描了最近 ${settings.maxRecallFiles || 1000} 个；` +
@@ -268,7 +291,7 @@ export async function buildRecall(settings, query) {
   if (text.length > maxChars) text = `${text.slice(0, maxChars)}\n…（已截断）`
   return {
     text,
-    files: [...baseline.map((d) => d.path), ...hits.map((h) => h.doc.path)],
+    files: [...baseline.map((d) => d.path), ...hits.map((h) => h.doc.path), ...linked.map((d) => d.path)],
     baseline: baseline.length,
     hits: hits.length,
     truncated: loaded.truncated,

@@ -1,6 +1,6 @@
 {
   "name": "dsh-mesh",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "private": true,
   "description": "DSH Mesh: shared memory (AGENTS/skills/summaries) and cross-device DSH delegation over DSH Remote.",
   "keywords": [
@@ -21,7 +21,7 @@
     "test": "node --test",
     "mcp": "node adapters/mcp-server.mjs",
     "mm": "node bin/mm.mjs",
-    "check": "node --check index.js && node --check client.js && node --check src/config.js && node --check src/store.js && node --check src/agents.js && node --check src/remote.js && node --check src/tools.js && node --check src/dashboard.js && node --check src/native.js && node --check src/recall.js && node --check src/policy.js && node --check src/capture.js && node --check src/inbox.js && node --check src/backup.js && node --check src/command.js && node --check src/maintenance.js && node --check src/skills.js && node --check src/briefing.js && node --check adapters/mcp-server.mjs && node --check bin/mm.mjs"
+    "check": "node --check index.js && node --check client.js && node --check src/config.js && node --check src/store.js && node --check src/agents.js && node --check src/remote.js && node --check src/tools.js && node --check src/dashboard.js && node --check src/native.js && node --check src/recall.js && node --check src/policy.js && node --check src/capture.js && node --check src/inbox.js && node --check src/backup.js && node --check src/command.js && node --check src/maintenance.js && node --check src/skills.js && node --check src/briefing.js && node --check src/query.js && node --check src/lifecycle.js && node --check src/links.js && node --check src/tasks.js && node --check adapters/mcp-server.mjs && node --check bin/mm.mjs"
   },
   "bin": {
     "mesh-memory": "bin/mm.mjs"

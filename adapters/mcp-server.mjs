@@ -2,6 +2,8 @@ import path from 'node:path'
 import { settingsOf } from '../src/config.js'
 import { ensureLayout, writeNote, searchMemory, readMemory, recentFiles, parseFrontmatter } from '../src/store.js'
 import { doctor } from '../src/maintenance.js'
+import { queryMemory } from '../src/query.js'
+import { contextFor } from '../src/links.js'
 
 /**
  * mesh-memory MCP server（stdio，JSON-RPC 2.0）。
@@ -60,11 +62,29 @@ const TOOLS = [
   },
   {
     name: 'memory_context',
-    description: 'Build context for a topic: top search hits plus their paths, ready to read.',
+    description: 'Build context for a topic: seed notes from search, then expand one hop through [[wikilinks]].',
     inputSchema: {
       type: 'object',
-      properties: { query: { type: 'string' }, limit: { type: 'number' } },
-      required: ['query'],
+      properties: { query: { type: 'string' }, path: { type: 'string' }, depth: { type: 'number' }, limit: { type: 'number' } },
+    },
+  },
+  {
+    name: 'memory_query',
+    description: 'Filter memories by frontmatter metadata: kind, memoryType, status, device, agent, tag, title, updatedAfter/Before.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string' },
+        memoryType: { type: 'string' },
+        status: { type: 'string' },
+        device: { type: 'string' },
+        agent: { type: 'string' },
+        tag: { type: 'string' },
+        title: { type: 'string' },
+        updatedAfter: { type: 'string' },
+        updatedBefore: { type: 'string' },
+        limit: { type: 'number' },
+      },
     },
   },
   {
@@ -104,17 +124,19 @@ async function callTool(name, args = {}) {
       const rows = await recentFiles(settings, kind, Number(args.limit) || 10)
       return text({ count: rows.length, items: rows })
     }
-    case 'memory_context': {
-      const rows = await searchMemory(settings, String(args.query || ''), Number(args.limit) || 5)
-      const items = []
-      for (const row of rows.slice(0, 5)) {
-        try {
-          const raw = await readMemory(settings, row.path)
-          const parsed = parseFrontmatter(raw)
-          items.push({ path: row.path, title: parsed.attrs.title || '', description: parsed.attrs.description || '', excerpt: String(parsed.body || '').slice(0, 1200) })
-        } catch {}
+    case 'memory_context':
+      return text(await contextFor(settings, {
+        path: args.path,
+        query: args.query,
+        depth: Number(args.depth) || 1,
+        limit: Number(args.limit) || 8,
+      }))
+    case 'memory_query': {
+      const filters = {}
+      for (const key of ['kind', 'memoryType', 'status', 'device', 'agent', 'tag', 'title', 'updatedAfter', 'updatedBefore']) {
+        if (args[key] !== undefined && args[key] !== '') filters[key] = args[key]
       }
-      return text({ query: args.query, count: items.length, items })
+      return text(await queryMemory(settings, filters, { limit: Number(args.limit) || 100 }))
     }
     case 'memory_doctor':
       return text(await doctor(settings))
@@ -126,7 +148,7 @@ async function callTool(name, args = {}) {
 async function handle(msg) {
   const { id, method, params } = msg
   if (method === 'initialize') {
-    return { jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'mesh-memory', version: '0.11.0' } } }
+    return { jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'mesh-memory', version: '0.12.0' } } }
   }
   if (method === 'notifications/initialized') return null
   if (method === 'ping') return { jsonrpc: '2.0', id, result: {} }

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.12.0 — 2026-11-01
+
+P2 余项：任务对象、元数据查询、生命周期、wikilink 图、拓扑快照。
+
+- **任务对象**：`src/tasks.js`，任务存 `tasks/<device>/<id>.json`（每设备单写者）；工具 `mesh_task_create/run/list/get/cancel`；`mesh_task_run` 把 `mesh_run` 的状态/结果写回任务。
+- **元数据查询**：`src/query.js` + `mesh_memory_query`（kind/memoryType/status/device/agent/tag/title/时间）；`statusCounts` 给 UI。
+- **生命周期**：`status` 字段（active/archived/superseded/draft）；`mesh_memory_archive` / `unarchive`；归档自动写 `invalidAt`，搜索/召回排除。
+- **wikilink 图**：`src/links.js` 解析 `[[标题]]`/`[[permalink]]`，`mesh_memory_context` 取 1–2 跳上下文；召回命中后自动补最多 2 条关联条目。
+- **拓扑快照**：`mesh_topology` 返回设备（含 hostId/lastSeen）、计数、状态分布、任务、图规模。
+- MCP 新增 `memory_query`，`memory_context` 改为按 wikilink 扩展；CLI 新增 `query/archive/unarchive/tasks/topology`，`context` 走图扩展。
+- 测试：新增 query/lifecycle/links/tasks 用例。
+
 ## 0.11.0 — 2026-11-01
 
 P1 自主生长 + P2 互通。
