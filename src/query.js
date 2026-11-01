@@ -68,6 +68,21 @@ export async function queryMemory(settings, filters = {}, { limit = 100, include
   return { count: rows.length, items: rows.slice(0, Math.max(1, Number(limit) || 100)) }
 }
 
+/** 每个 collection（memory/<id>/）的条目数，给界面导航用。 */
+export async function collectionCounts(settings) {
+  const counts = {}
+  for (const file of await walk(settings.memoryDir, 'memory')) {
+    const rel = relOf(settings, file)
+    if (isConflictPath(rel)) continue
+    try {
+      const attrs = parseFrontmatter(await readInside(settings, rel, { maxBytes: 200_000 })).attrs
+      const id = String(attrs.kind || rel.split('/')[1] || 'notes')
+      counts[id] = (counts[id] || 0) + 1
+    } catch {}
+  }
+  return counts
+}
+
 /** 状态统计（给 UI 的侧栏用）。 */
 export async function statusCounts(settings) {
   const counts = { active: 0, archived: 0, superseded: 0, draft: 0, invalid: 0 }

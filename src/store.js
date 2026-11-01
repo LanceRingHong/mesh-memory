@@ -3,6 +3,7 @@ import path from 'node:path'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { stamp, slugify } from './config.js'
+import { readProfile, BUILTIN_KINDS } from './profile.js'
 
 const AGENTS_TEMPLATE = `# 共享记忆（dsh-mesh）
 
@@ -494,7 +495,8 @@ export async function writeNote(settings, {
   invalidAt,
   supersededBy,
 }) {
-  const allowed = new Set(['facts', 'decisions', 'projects', 'notes'])
+  const profile = await readProfile(settings).catch(() => null)
+  const allowed = new Set([...BUILTIN_KINDS, ...(profile?.collections || []).map((c) => c.id)])
   const k = allowed.has(kind) ? kind : 'notes'
   const agentTypes = new Set(['user', 'feedback', 'project', 'reference'])
   const type = agentTypes.has(memoryType) ? memoryType : 'reference'

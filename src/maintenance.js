@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { parseFrontmatter, readInside, sha256, listConflicts, walk, writeNote } from './store.js'
+import { slugify } from './config.js'
+import { defaultProfile, writeProfile, ensureCollectionDirs } from './profile.js'
 
 /**
  * 记忆维护层（0.11.0）：doctor / duplicates / reflect / onboard。
@@ -205,32 +207,50 @@ export async function reflectBrief(settings, { since = '', days = 7 } = {}) {
   }
 }
 
-/** 入门蓝图：根据领域生成结构建议，不写盘。 */
+/** 入门蓝图：根据领域生成结构建议（含 profile），不写盘。 */
 export function onboardBlueprint({ domains = [], volume = 'light', project = 'my-memory' } = {}) {
   const picked = (Array.isArray(domains) ? domains.filter(Boolean) : []).slice(0, 6)
   const list = picked.length ? picked : ['项目与任务', '偏好与决策', '技术笔记']
+  const palette = ['#4fd1c5', '#ffd08a', '#9ad0ff', '#ef9a9a', '#c9a7ff', '#6fcf97']
+  const base = defaultProfile()
+  const custom = list.map((domain, index) => ({
+    id: slugify(domain) || `col-${index + 1}`,
+    label: domain,
+    icon: '▣',
+    color: palette[index % palette.length],
+    order: 100 + index * 10,
+  }))
+  const collections = [...base.collections, ...custom]
+  const profile = {
+    version: 1,
+    name: project,
+    collections,
+    groups: [
+      { id: 'all', label: '全部记忆', collections: collections.map((c) => c.id) },
+      { id: 'core', label: '基础', collections: base.collections.map((c) => c.id) },
+      ...custom.map((c) => ({ id: c.id, label: c.label, collections: [c.id] })),
+    ],
+  }
   const kinds = [
-    { kind: 'projects', purpose: '目标、路线、里程碑', noteType: 'project' },
-    { kind: 'decisions', purpose: '做过的选择与理由', noteType: 'project' },
-    { kind: 'facts', purpose: '稳定事实、偏好、环境', noteType: 'user' },
-    { kind: 'notes', purpose: '临时笔记与反思', noteType: 'reference' },
+    ...base.collections.map((c) => ({ kind: c.id, purpose: c.label, noteType: c.id === 'decisions' ? 'project' : 'reference' })),
+    ...custom.map((c) => ({ kind: c.id, purpose: c.label, noteType: 'project' })),
   ]
-  const heavy = volume === 'heavy'
   return {
     project,
     volume,
     domains: list,
     kinds,
+    profile,
     baseline: [
       { title: `${project} 使用约定`, kind: 'facts', memoryType: 'feedback', baseline: true, baselinePriority: 10 },
     ],
-    firstNotes: list.map((d) => ({ title: d, kind: 'projects', memoryType: 'project', description: `${d} 的目标与进展` })),
-    folders: heavy ? ['memory/{kind}', 'sessions/{device}', 'skills', 'index'] : ['memory/{kind}', 'sessions/{device}'],
+    firstNotes: list.map((d, i) => ({ title: d, kind: custom[i].id, memoryType: 'project', description: `${d} 的目标与进展` })),
+    folders: ['memory/{collection}', 'sessions/{device}', 'skills', 'index'],
     rules: [
       '先 search 再 write，避免重复',
       '一条记忆一个主题；标题写清结论，description 写一句话',
       '决策写 decisions 并带理由；偏好写 facts 且 baseline 视需要',
-      '过期用 supersededBy / invalidAt，不删除',
+      '过期用 supersededBy / invalidAt / archived，不删除',
     ],
   }
 }
@@ -238,6 +258,10 @@ export function onboardBlueprint({ domains = [], volume = 'light', project = 'my
 /** 把蓝图落成一条笔记；必须 confirm。 */
 export async function applyOnboarding(settings, blueprint, { confirm = false } = {}) {
   if (confirm !== true) throw new Error('落盘需要 confirm:true')
+  if (blueprint?.profile) {
+    const profile = await writeProfile(settings, blueprint.profile)
+    await ensureCollectionDirs(settings, profile)
+  }
   const title = `${blueprint.project} 入门蓝图`
   const content = [
     `## 领域`,
@@ -245,6 +269,9 @@ export async function applyOnboarding(settings, blueprint, { confirm = false } =
     '',
     '## 分类',
     ...blueprint.kinds.map((k) => `- \`${k.kind}\`：${k.purpose}`),
+    '',
+    '## 仓库结构',
+    ...(blueprint.profile?.collections || []).map((c) => `- \`memory/${c.id}\`：${c.label}`),
     '',
     '## 规则',
     ...blueprint.rules.map((r) => `- ${r}`),

@@ -24,7 +24,8 @@ import { listInbox, readInbox, acceptInbox, rejectInbox } from './inbox.js'
 import { flushAllSessions, flushCurrent } from './capture.js'
 import { snapshot, listSnapshots, restoreSnapshot, scheduleSnapshot } from './backup.js'
 import { doctor, duplicates, reflectBrief, onboardBlueprint, applyOnboarding } from './maintenance.js'
-import { queryMemory, statusCounts } from './query.js'
+import { queryMemory, statusCounts, collectionCounts } from './query.js'
+import { ensureProfile, writeProfile, ensureCollectionDirs } from './profile.js'
 import { archiveNote, unarchiveNote } from './lifecycle.js'
 import { contextFor, buildLinkGraph } from './links.js'
 import { createTask, updateTask, listTasks, getTask, cancelTask, taskSummary } from './tasks.js'
@@ -760,24 +761,52 @@ export function registerTools(ctx, settings) {
   })
 
   add({
+    name: 'mesh_profile',
+    description: '读取/更新仓库结构 profile（collections / groups / 配色）；记忆界面按它渲染。',
+    parameters: {
+      action: str('get（默认）或 set'),
+      json: str('set 时的完整 profile JSON 字符串'),
+      confirm: bool('set 必须为 true'),
+    },
+    async execute(args) {
+      await ensureLayout(settings)
+      if (String(args.action || 'get') === 'get') {
+        return json({ ok: true, profile: await ensureProfile(settings) })
+      }
+      if (args.confirm !== true) throw new Error('更新 profile 需要 confirm:true')
+      let parsed
+      try {
+        parsed = typeof args.json === 'string' ? JSON.parse(args.json) : args.json
+      } catch (error) {
+        throw new Error(`json 解析失败：${error?.message || error}`)
+      }
+      const profile = await writeProfile(settings, parsed)
+      await ensureCollectionDirs(settings, profile)
+      return json({ ok: true, profile })
+    },
+  })
+
+  add({
     name: 'mesh_topology',
     description: '给界面用的拓扑快照：设备、计数、状态分布、任务、wikilink 图规模、收件箱。',
     parameters: {},
     async execute() {
       await ensureLayout(settings)
-      const [devices, c, statuses, tasks, graph, inbox] = await Promise.all([
+      const [devices, c, statuses, tasks, graph, inbox, collections] = await Promise.all([
         listDevices(settings),
         counts(settings),
         statusCounts(settings),
         taskSummary(settings),
         buildLinkGraph(settings),
         listInbox(settings),
+        collectionCounts(settings),
       ])
       return json({
         ok: true,
         generatedAt: new Date().toISOString(),
         local: { device: settings.deviceName, deviceSlug: settings.deviceSlug, agent: settings.agentName, memoryDir: settings.memoryDir },
         counts: { ...c, inbox: inbox.length },
+        collections,
         statuses,
         tasks,
         graph: { nodes: graph.nodes.length, edges: graph.edges.length, broken: graph.broken.length },

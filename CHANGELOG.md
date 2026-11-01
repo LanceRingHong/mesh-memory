@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.13.0 — 2026-11-01
+
+仓库结构 profile：记忆界面按用户自己的分类/分组/配色渲染。
+
+- 新增 `src/profile.js`：`index/profile.json`（随 Syncthing 同步），collections（id/label/icon/color/order）+ groups；默认四类 + 基础/工作分组；原子写、非法 id 过滤、内置类补齐。
+- `writeNote` 接受 profile 里声明的自定义 collection（`memory/<id>/`）；`ensureProfile` / `ensureCollectionDirs` 在启动时建目录。
+- 新工具 `mesh_profile`（get / set + confirm）；`mesh_topology` 增加 `collections` 计数。
+- onboarding 蓝图生成 `profile`：每个领域一个 collection + 分组；apply 时写入 profile 并建目录。
+- 原型：记忆页左侧按 profile 分组渲染；设置页加入主题（dark/light/system）、密度、强调色、默认页面、仓库结构预览（localStorage）。
+- 测试：profile 默认/自定义 collection 写入/非法 id 过滤。
+
 ## 0.12.0 — 2026-11-01
 
 P2 余项：任务对象、元数据查询、生命周期、wikilink 图、拓扑快照。

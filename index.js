@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { settingsOf } from './src/config.js'
 import { ensureLayout, publishNativeManifest, updateDevices } from './src/store.js'
+import { ensureProfile, ensureCollectionDirs } from './src/profile.js'
 import { materializeAgents, syncSkills } from './src/agents.js'
 import { registerTools } from './src/tools.js'
 import { registerDashboard } from './src/dashboard.js'
@@ -169,6 +170,8 @@ export function apply(ctx, config = {}) {
   Promise.resolve()
     .then(async () => {
       await ensureLayout(settings)
+      const profile = await ensureProfile(settings)
+      await ensureCollectionDirs(settings, profile)
       await updateDevices(settings).catch(() => {})
       await publishNativeManifest(settings)
       if (settings.autoSyncAgents) await materializeAgents(settings)
