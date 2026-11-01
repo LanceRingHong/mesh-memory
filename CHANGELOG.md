@@ -1,3 +1,32 @@
+## 0.25.0 — 2026-11-01
+
+对照 OpenClaw 记忆体系补两处语义：**晋升**与**偏好 supersede**。
+
+### 晋升（memory promotion）
+- 新增 `src/promote.js`：六信号确定性打分（相关度 .30 / 频次 .24 / 查询多样性 .15 / 新近度 .15 / 跨天巩固 .10 / 标签密度 .06），产出三类建议——**杂项被反复召回 → 升级分类**、**常被用到的速查 → 设 baseline**、**半年没碰 → 归档**。不调用模型，不自动改记忆。
+- `recall.jsonl` 现在记录每条命中的分与来源段（`items: [{path, score, lane}]`），作为相关度信号；旧日志仍可用（回退到 `files`）。
+- 新接口 `GET /api/promote`；新工具 `mesh_memory_promote`（只读）。
+- 新接口 `POST /api/memories/<path>/move {kind}`：换集合（保留正文与 permalink，旧文件进 `.trash/`），用于「升级分类」。
+
+### 偏好（preference supersede）
+- 新增 `src/prefer.js` 与工具 `mesh_memory_prefer`：同主题偏好**只保留一个现行版本**——再次写入就地更新并统一标题为 `偏好：<主题>`；历史重复条目自动置 `invalidAt` + `supersededBy`，绝不追加矛盾指令。
+- 偏好默认 `baseline: true`、优先级 30，每场开场生效。
+- `/api/data` 的 memories 增加 `baseline` / `baselinePriority`，客户端可显示基线状态。
+
+### 客户端
+- 「整理」页新增「晋升候选」卡：标题 + 分值 + 为什么 + 六信号摘要，按钮直接执行（设为基线 / 升级到指定集合 / 归档）。
+
+### 测试
+`npm test` 127 例（124 过 / 3 跳过 / 0 失败）：新增 `test/promote.test.js`（4 例）、`test/prefer.test.js`（4 例）。
+
+### 修复（2026-11-01 23:33 宿主崩溃）
+- 崩溃栈：`writeText(dashboard.js)` ← `writeJson` ← `proxyToServe` 的 upstream `error` 回调 → `ERR_HTTP_HEADERS_SENT` → **DSH 宿主整个退出**。
+- 根因：反代把上游响应头写出去之后上游中断（serve 被杀），错误回调又写了一次头；该异常发生在异步回调里，属于未捕获异常。
+- 修复：新增 `src/http-util.js`（`writeText` / `writeJson` / `destroyQuietly`），头已发出时只收尾不重写；反代对上游 `error`、`res` 已结束、上游中途 pipeline 出错分别做断开处理，不再补响应。
+- 回归测试：`test/http-util.test.js`（4 例，含"头已发出时不得再次 writeHead"）。
+
+### 备注
+这是 OpenClaw Dreaming「Deep 阶段」与 `USER.md` 的等价物，但**保留人审**：候选只出建议，动作由人点。
 ## 0.24.0 — 2026-11-01
 
 S2 收尾：去重合并、冲突并排裁决、定时反思；入口进应用（任务 B）。

@@ -339,6 +339,12 @@ export async function buildRecall(settings, query) {
   return {
     text,
     files: [...baseline.map((d) => d.path), ...hits.map((h) => h.doc.path), ...linked.map((d) => d.path)],
+    // 0.25.0：带分数的注入明细，recall.jsonl 用它给「晋升」打分（rel 信号）。
+    scored: [
+      ...baseline.map((doc) => ({ path: doc.path, score: 0, lane: 'baseline' })),
+      ...hits.map((hit) => ({ path: hit.doc.path, score: Math.round(hit.score * 1000) / 1000, lane: 'hit' })),
+      ...linked.map((doc) => ({ path: doc.path, score: 0, lane: 'linked' })),
+    ],
     baseline: baseline.length,
     hits: hits.length,
     truncated: loaded.truncated,
@@ -402,7 +408,7 @@ export function registerRecall(ctx, settings) {
       seen.set(session.id, signature)
       if (seen.size > 200) seen.delete(seen.keys().next().value)
       // 只记真正注入过的轮次，供"这条记忆最近被用到没有"查询。
-      void recordRecall(settings, { query, files: built.files })
+      void recordRecall(settings, { query, files: built.files, items: built.scored, session: session.id })
       return {
         ...assembled,
         contexts: [

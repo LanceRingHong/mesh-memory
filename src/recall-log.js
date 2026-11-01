@@ -14,15 +14,27 @@ export function recallLogPath(settings) {
   return path.join(settings.dshHome, 'dsh-mesh', 'recall.jsonl')
 }
 
-export async function recordRecall(settings, { query, files } = {}) {
+export async function recordRecall(settings, { query, files, items, session } = {}) {
   const file = recallLogPath(settings)
   const list = (Array.isArray(files) ? files : []).filter((item) => typeof item === 'string').slice(0, 20)
   if (!list.length) return
+  // 0.25.0：除路径外再记每条的分与来源段（baseline / hit / linked），给「晋升」打分用。
+  const scored = (Array.isArray(items) ? items : [])
+    .filter((item) => item && typeof item.path === 'string')
+    .slice(0, 20)
+    .map((item) => ({
+      path: item.path,
+      score: Number.isFinite(Number(item.score)) ? Math.round(Number(item.score) * 1000) / 1000 : 0,
+      lane: String(item.lane || 'hit'),
+    }))
   const line = `${JSON.stringify({
     at: new Date().toISOString(),
     device: settings.deviceName || '',
+    // 记会话 id：同一场对话里反复召回不等于"跨情境需要"，晋升打分要按会话去重。
+    ...(session ? { session: String(session).slice(0, 60) } : {}),
     query: String(query || '').slice(0, 200),
     files: list,
+    ...(scored.length ? { items: scored } : {}),
   })}\n`
   try {
     await fs.mkdir(path.dirname(file), { recursive: true })

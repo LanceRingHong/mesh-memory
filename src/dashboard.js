@@ -1,5 +1,6 @@
 import http from 'node:http'
 import path from 'node:path'
+import { writeJson, writeText, destroyQuietly } from './http-util.js'
 import {
   ensureLayout,
   counts,
@@ -118,33 +119,52 @@ function proxyToServe(req, res, pathname, search) {
   const upstream = http.request(
     { host: '127.0.0.1', port: SERVE_PORT, method: req.method, path: targetPath, headers },
     (up) => {
-      res.writeHead(up.statusCode || 502, {
-        'content-type': up.headers['content-type'] || 'application/json; charset=utf-8',
-        'cache-control': 'no-store',
-      })
+      // 上游中途出错（serve 被杀 / 崩溃）：只能断连接，不能再补响应头。
+      up.on('error', () => destroyQuietly(res))
+      if (res.writableEnded) {
+        up.destroy()
+        return
+      }
+      try {
+        res.writeHead(up.statusCode || 502, {
+          'content-type': up.headers['content-type'] || 'application/json; charset=utf-8',
+          'cache-control': 'no-store',
+        })
+      } catch {
+        up.destroy()
+        destroyQuietly(res)
+        return
+      }
       up.pipe(res)
+      res.on('close', () => {
+        try {
+          up.destroy()
+        } catch {}
+      })
     },
   )
   upstream.on('error', () => {
-    writeJson(res, 503, {
-      ok: false,
-      error: `mesh-memory serve 未运行（127.0.0.1:${SERVE_PORT}）：在 plugin/ 下执行 npm run serve`,
-    })
+    // 0.25.0 修复：这里以前无条件 writeJson，若上游已经发过头就会 ERR_HTTP_HEADERS_SENT，
+    // 而它发生在异步回调里 → 未捕获异常 → DSH 宿主整个退出（2026-11-01 23:33 事故）。
+    if (res.headersSent || res.writableEnded) {
+      destroyQuietly(res)
+      return
+    }
+    try {
+      writeJson(res, 503, {
+        ok: false,
+        error: `mesh-memory serve 未运行（127.0.0.1:${SERVE_PORT}）：在 plugin/ 下执行 npm run serve`,
+      })
+    } catch {
+      destroyQuietly(res)
+    }
+  })
+  req.on('error', () => {
+    try {
+      upstream.destroy()
+    } catch {}
   })
   req.pipe(upstream)
-}
-
-function writeText(res, status, type, text) {
-  res.writeHead(status, {
-    'content-type': `${type}; charset=utf-8`,
-    'cache-control': 'no-store',
-    'content-length': Buffer.byteLength(text),
-  })
-  res.end(text)
-}
-
-function writeJson(res, status, body) {
-  writeText(res, status, 'application/json', JSON.stringify(body))
 }
 
 /**

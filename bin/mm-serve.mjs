@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { URL } from 'node:url'
 import { settingsOf } from '../src/config.js'
 import { ensureLayout, walk, readInside, parseFrontmatter, counts, listDevices, searchMemory, readMemory, writeNote, updateNote, trashNote } from '../src/store.js'
-import { archiveNote, unarchiveNote } from '../src/lifecycle.js'
+import { archiveNote, unarchiveNote, moveNote } from '../src/lifecycle.js'
 import { acceptInbox, rejectInbox } from '../src/inbox.js'
 import { createTask, cancelTask } from '../src/tasks.js'
 import { writeProfile, ensureCollectionDirs } from '../src/profile.js'
@@ -17,6 +17,7 @@ import { listInbox, readInbox, attachSupport, undoDecision, batchInbox } from '.
 import { doctor, duplicates, reflectBrief } from '../src/maintenance.js'
 import { runMaintenance, readMaintenanceState, maintenancePaths, DEFAULT_REFLECT_HOURS } from '../src/maintenance-log.js'
 import { listConflictPairs, pairConflict, resolveConflict } from '../src/conflicts.js'
+import { promotionCandidates } from '../src/promote.js'
 import { readProfile, ensureProfile } from '../src/profile.js'
 import { collectionCounts, queryMemory, statusCounts } from '../src/query.js'
 import { explainRecall } from '../src/recall.js'
@@ -157,6 +158,8 @@ async function collectData() {
       validAt: String(parsed.attrs.validAt || ''),
       invalidAt: String(parsed.attrs.invalidAt || ''),
       supersededBy: String(parsed.attrs.supersededBy || ''),
+      baseline: parsed.attrs.baseline === true,
+      baselinePriority: Number(parsed.attrs.baselinePriority) || 0,
       checksum: String(parsed.attrs.checksum || ''),
       body: String(parsed.body || '').slice(0, 6000),
     })
@@ -330,6 +333,17 @@ const server = http.createServer(async (req, res) => {
         : await unarchiveNote(settings, rel)
       return send(res, 200, { ok: true, ...result })
     }
+    if (req.method === 'POST' && /^\/api\/memories\/.+\/move$/.test(url.pathname)) {
+      const rel = decodeURIComponent(url.pathname.match(/^\/api\/memories\/(.+)\/move$/)[1])
+      const body = await readJson(req)
+      try {
+        const result = await moveNote(settings, rel, body.kind, { confirm: true })
+        await syncIndex(settings, indexDeps).catch(() => {})
+        return send(res, 200, { ok: true, ...result })
+      } catch (error) {
+        return send(res, 400, { ok: false, error: String(error?.message || error) })
+      }
+    }
     if (req.method === 'POST' && url.pathname === '/api/inbox/accept') {
       const body = await readJson(req)
       return send(res, 200, {
@@ -413,6 +427,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/api/maintenance/run') {
       const entry = await runMaintenanceSerialized('manual')
       return send(res, 200, { ok: true, last: entry })
+    }
+    if (url.pathname === '/api/promote') {
+      return send(res, 200, await promotionCandidates(settings, { limit: Number(url.searchParams.get('limit')) || 20 }))
     }
     if (url.pathname === '/api/duplicates') {
       return send(res, 200, { ...(await duplicates(settings)) })

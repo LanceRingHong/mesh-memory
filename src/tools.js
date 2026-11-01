@@ -27,6 +27,8 @@ import { doctor, duplicates, reflectBrief, onboardBlueprint, applyOnboarding } f
 import { queryMemory, statusCounts, collectionCounts } from './query.js'
 import { ensureProfile, writeProfile, ensureCollectionDirs } from './profile.js'
 import { archiveNote, unarchiveNote } from './lifecycle.js'
+import { setPreference } from './prefer.js'
+import { promotionCandidates } from './promote.js'
 import { contextFor, buildLinkGraph } from './links.js'
 import { createTask, updateTask, listTasks, getTask, cancelTask, taskSummary } from './tasks.js'
 import {
@@ -268,6 +270,46 @@ export function registerTools(ctx, settings) {
       const result = await updateNote(settings, args.path, patch)
       scheduleSnapshot(settings, 'memory:update')
       return json({ ok: true, ...result })
+    },
+  })
+
+  add({
+    name: 'mesh_memory_prefer',
+    description:
+      '写或改一条偏好：同一主题只保留一条现行版本（改动就地更新，旧条目 supersede），默认进 baseline 每场开场生效。偏好变了用这个，不要追加一条矛盾的。',
+    parameters: {
+      topic: str('偏好主题，如“打字方式”“分类粒度”', { required: true }),
+      directive: str('偏好内容（祈使句最好：Always / Never / Prefer …）', { required: true }),
+      kind: str('目录分类（默认 facts）'),
+      description: str('一句话描述（可选）'),
+      tags: { type: 'array', items: { type: 'string' }, description: '额外标签（可选）' },
+      baseline: { type: 'boolean', description: '是否每场开场注入（默认 true）' },
+    },
+    async execute(args) {
+      await ensureLayout(settings)
+      const result = await setPreference(settings, {
+        topic: args.topic,
+        directive: args.directive,
+        kind: args.kind,
+        description: args.description,
+        tags: args.tags || [],
+        baseline: args.baseline !== false,
+      })
+      scheduleSnapshot(settings, 'memory:prefer')
+      return json(result)
+    },
+  })
+
+  add({
+    name: 'mesh_memory_promote',
+    description:
+      '晋升候选（只读）：按召回频次 / 查询多样性 / 新近度等信号，给出「设 baseline / 升级分类 / 归档」的建议；不自动改记忆。',
+    parameters: {
+      limit: num('最多返回多少条（默认 20）'),
+    },
+    async execute(args) {
+      await ensureLayout(settings)
+      return json(await promotionCandidates(settings, { limit: Number(args.limit) || 20 }))
     },
   })
 

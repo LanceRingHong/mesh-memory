@@ -1,4 +1,4 @@
-import { parseFrontmatter, readInside, renderNote, writeFileAtomic, publishNativeManifest, safeRel } from './store.js'
+import { parseFrontmatter, readInside, renderNote, writeFileAtomic, publishNativeManifest, safeRel, trashNote } from './store.js'
 
 const STATUSES = new Set(['active', 'archived', 'superseded', 'draft'])
 
@@ -37,4 +37,26 @@ export function archiveNote(settings, rel, options = {}) {
 
 export function unarchiveNote(settings, rel) {
   return setStatus(settings, rel, 'active', { confirm: true })
+}
+
+/**
+ * 换集合（0.25.0）：把一条记忆从 `memory/<a>/` 挪到 `memory/<b>/`，保留正文与 permalink。
+ * 用于「杂项被反复用到 → 升级为正式分类」的晋升动作。旧文件进 `.trash/`（可恢复）。
+ */
+export async function moveNote(settings, rel, toKind, { confirm = false } = {}) {
+  if (confirm !== true) throw new Error('移动需要 confirm:true')
+  const relPosix = String(rel || '').replace(/\\/g, '/')
+  const match = relPosix.match(/^memory\/([^/]+)\/([^/]+\.md)$/i)
+  if (!match) throw new Error('只允许移动 memory/<kind>/<file>.md')
+  const target = String(toKind || '').trim()
+  if (!target) throw new Error('toKind 必填')
+  if (match[1] === target) return { from: relPosix, to: relPosix, moved: false }
+
+  const parsed = parseFrontmatter(await readInside(settings, relPosix))
+  const attrs = { ...parsed.attrs, kind: target, updatedAt: new Date().toISOString() }
+  const nextRel = `memory/${target}/${match[2]}`
+  await writeFileAtomic(safeRel(settings, nextRel), renderNote(attrs, parsed.body))
+  await trashNote(settings, relPosix)
+  await publishNativeManifest(settings).catch(() => {})
+  return { from: relPosix, to: nextRel, moved: true }
 }
