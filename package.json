@@ -1,6 +1,6 @@
 {
   "name": "dsh-mesh",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "private": true,
   "description": "mesh-memory: shared memory network for AI agents — plain Markdown, multi-device, reviewable growth.",
   "keywords": [

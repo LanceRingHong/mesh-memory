@@ -1,3 +1,12 @@
+## 0.22.0 — 2026-11-01
+
+S2 治理（第三批）：索引层（SQLite + FTS5）。
+
+- 新增 `src/indexdb.js`：`$DSH_HOME/dsh-memory/index.db`，表 `docs`（含正文缓存）/ `docs_fts`（FTS5）/ `links`；标记为**可丢弃投影**，删掉可全量重建。
+- **中文检索**：FTS5 默认分词器不切中文（2 字词查不到），改为把 `tokenize()` 产出的 bigram 落进 `tokens` 列再 MATCH，`密钥` 这类两个字也能命中。
+- 同步：`syncIndex` 按 `path + mtime + size` 增量；启动时自动跑一次，失败不影响主流程。
+- 接口：`GET /api/search` 优先走索引（返回 `source: 'index'`，失败回退扫盘）；`GET /api/index/status`；`POST /api/index/sync`（可 `rebuild: true`）。
+- 基准脚本 `scripts/bench-index.mjs`：1000 条记忆下 **索引检索 p95 = 0.7ms**，扫盘平均 1329ms；冷同步 3.2s、热同步 107ms。
 ## 0.21.0 — 2026-11-01
 
 S2 治理（第二批）：草稿默认预览 + 过期表达。
@@ -410,6 +419,7 @@ P1 自主生长 + P2 互通。
 ## 0.1.0 — 2026-10-31
 
 - Initial MVP: shared memory, 13 `mesh_*` tools, Remote delegation, file transfer.
+
 
 
 

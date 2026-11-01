@@ -10,7 +10,8 @@ import { archiveNote, unarchiveNote } from '../src/lifecycle.js'
 import { acceptInbox, rejectInbox } from '../src/inbox.js'
 import { createTask, cancelTask } from '../src/tasks.js'
 import { writeProfile, ensureCollectionDirs } from '../src/profile.js'
-import { buildLinkGraph } from '../src/links.js'
+import { buildLinkGraph, extractLinks } from '../src/links.js'
+import { indexStats, searchIndex, syncIndex, clearIndex } from '../src/indexdb.js'
 import { listTasks, taskSummary } from '../src/tasks.js'
 import { listInbox, readInbox, attachSupport, undoDecision, batchInbox } from '../src/inbox.js'
 import { doctor } from '../src/maintenance.js'
@@ -36,6 +37,19 @@ const settings = settingsOf({
 
 await ensureLayout(settings)
 await ensureProfile(settings)
+
+// 索引是投影：启动时增量同步一次；失败不影响主流程（搜索会回退到直接读盘）。
+const indexDeps = {
+  walk,
+  readInside,
+  parseFrontmatter,
+  isConflictPath: (rel) => String(rel).includes('.sync-conflict-'),
+  extractLinks,
+}
+syncIndex(settings, indexDeps)
+  .then((result) => console.info(`[mesh-memory] index synced ${JSON.stringify(result)}`))
+  .catch((error) => console.warn(`[mesh-memory] index sync failed: ${error?.message || error}`))
+
 
 /* ------------------ 活动流：文件变化 + SSE 推送 ------------------ */
 
@@ -306,6 +320,12 @@ const server = http.createServer(async (req, res) => {
       })
       return send(res, 200, { ok: true, ...result })
     }
+    if (req.method === 'POST' && url.pathname === '/api/index/sync') {
+      const body = await readJson(req)
+      if (body.rebuild === true) clearIndex(settings)
+      const result = await syncIndex(settings, indexDeps)
+      return send(res, 200, { ok: true, ...result, index: indexStats(settings) })
+    }
     if (req.method === 'POST' && url.pathname === '/api/tasks') {
       const body = await readJson(req)
       return send(res, 200, { ok: true, task: await createTask(settings, body) })
@@ -375,7 +395,16 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/search') {
       const q = url.searchParams.get('q') || ''
-      return send(res, 200, { items: await searchMemory(settings, q, Number(url.searchParams.get('limit')) || 20) })
+      const limit = Number(url.searchParams.get('limit')) || 20
+      // 优先走索引（快、带 bm25 排序）；索引不可用时回退到直接扫盘。
+      try {
+        return send(res, 200, { items: searchIndex(settings, q, { limit }), source: 'index' })
+      } catch {
+        return send(res, 200, { items: await searchMemory(settings, q, limit), source: 'scan' })
+      }
+    }
+    if (url.pathname === '/api/index/status') {
+      return send(res, 200, { ok: true, ...indexStats(settings) })
     }
     if (url.pathname === '/api/events') {
       res.writeHead(200, {

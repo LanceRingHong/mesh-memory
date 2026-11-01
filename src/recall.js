@@ -27,7 +27,7 @@ const ZH_STOPWORDS = new Set([
   '把', '被', '让', '给', '对', '从', '向', '于', '为', '着', '过', '地', '得',
 ])
 
-function tokenize(value) {
+export function tokenize(value) {
   const text = String(value || '').toLowerCase()
   const out = []
   for (const part of text.match(/[a-z0-9_]+|[\u4e00-\u9fff]+/g) || []) {
@@ -417,3 +417,4 @@ export function registerRecall(ctx, settings) {
   const off = ctx.on('system-prompt/assemble', handler)
   return typeof off === 'function' ? off : () => {}
 }
+
