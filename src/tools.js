@@ -176,7 +176,7 @@ export function registerTools(ctx, settings) {
     name: 'mesh_memory_write',
     description: '向共享记忆写入一条事实/决策/项目笔记（Markdown，带 frontmatter）。只写 memoryDir 内部，不写原始会话日志。',
     parameters: {
-      kind: str('目录分类', { enum: ['facts', 'decisions', 'projects', 'notes'] }),
+      kind: str('目录分类：facts/decisions/projects/notes，或 profile 里声明的自定义 collection'),
       memoryType: str('语义类型', { enum: ['user', 'feedback', 'project', 'reference'] }),
       title: str('标题'),
       description: str('一句话描述（检索靠它，务必写准）'),

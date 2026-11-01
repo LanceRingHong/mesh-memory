@@ -3,7 +3,11 @@ import http from 'node:http'
 import path from 'node:path'
 import { URL } from 'node:url'
 import { settingsOf } from '../src/config.js'
-import { ensureLayout, walk, readInside, parseFrontmatter, counts, listDevices, searchMemory, readMemory } from '../src/store.js'
+import { ensureLayout, walk, readInside, parseFrontmatter, counts, listDevices, searchMemory, readMemory, writeNote, updateNote, trashNote } from '../src/store.js'
+import { archiveNote, unarchiveNote } from '../src/lifecycle.js'
+import { acceptInbox, rejectInbox } from '../src/inbox.js'
+import { createTask, cancelTask } from '../src/tasks.js'
+import { writeProfile, ensureCollectionDirs } from '../src/profile.js'
 import { buildLinkGraph } from '../src/links.js'
 import { listTasks, taskSummary } from '../src/tasks.js'
 import { listInbox, readInbox } from '../src/inbox.js'
@@ -67,10 +71,25 @@ async function collectData() {
   const graph = await buildLinkGraph(settings)
   const report = await doctor(settings)
   const profile = await readProfile(settings)
+  const shared = { agents: '', skills: [], sessions: [] }
+  try { shared.agents = await readMemory(settings, 'AGENTS.shared.md') } catch {}
+  for (const file of await walk(settings.memoryDir, 'skills')) {
+    const rel = path.relative(settings.memoryDir, file).replace(/\\/g, '/')
+    try { shared.skills.push({ path: rel, name: path.basename(path.dirname(rel)), text: await readMemory(settings, rel) }) } catch {}
+  }
+  for (const file of await walk(settings.memoryDir, 'sessions')) {
+    const rel = path.relative(settings.memoryDir, file).replace(/\\/g, '/')
+    try {
+      const raw = await readMemory(settings, rel)
+      const parsed = parseFrontmatter(raw)
+      shared.sessions.push({ path: rel, title: String(parsed.attrs.title || path.basename(rel)), device: String(parsed.attrs.device || ''), text: String(parsed.body || '') })
+    } catch {}
+  }
   return {
     generatedAt: new Date().toISOString(),
     live: true,
     local: { device: settings.deviceName, agent: settings.agentName, memoryDir: settings.memoryDir },
+    shared,
     counts: { ...(await counts(settings)), inbox: inbox.length },
     profile,
     collections: await collectionCounts(settings),
@@ -89,11 +108,25 @@ function send(res, code, body, type = 'application/json; charset=utf-8') {
   res.writeHead(code, {
     'Content-Type': type,
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'content-type,x-mesh-token',
-    'Access-Control-Allow-Methods': 'GET,OPTIONS',
+    'Access-Control-Allow-Headers': 'content-type,x-mesh-token,x-mesh-action',
+    'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
     'Cache-Control': 'no-store',
   })
   res.end(type.startsWith('application/json') ? JSON.stringify(body) : String(body))
+}
+
+function readJson(req) {
+  return new Promise((resolve, reject) => {
+    let data = ''
+    req.on('data', (chunk) => {
+      data += chunk
+      if (data.length > 1_000_000) req.destroy()
+    })
+    req.on('end', () => {
+      try { resolve(data ? JSON.parse(data) : {}) } catch (error) { reject(error) }
+    })
+    req.on('error', reject)
+  })
 }
 
 const server = http.createServer(async (req, res) => {
@@ -102,7 +135,57 @@ const server = http.createServer(async (req, res) => {
   if (token && req.headers['x-mesh-token'] !== token && url.searchParams.get('token') !== token) {
     return send(res, 401, { ok: false, error: 'token required' })
   }
+  if (req.method !== 'GET' && req.headers['x-mesh-action'] !== '1') {
+    return send(res, 403, { ok: false, error: '写操作需要 x-mesh-action: 1' })
+  }
   try {
+    if (req.method === 'POST' && url.pathname === '/api/memories') {
+      const body = await readJson(req)
+      const file = await writeNote(settings, {
+        kind: body.kind, memoryType: body.memoryType, title: body.title, content: body.content,
+        description: body.description, tags: body.tags || [], agent: settings.agentName, source: 'api',
+      })
+      return send(res, 200, { ok: true, path: path.relative(settings.memoryDir, file).replace(/\\/g, '/') })
+    }
+    if (req.method === 'PUT' && url.pathname.startsWith('/api/memories/')) {
+      const rel = decodeURIComponent(url.pathname.slice('/api/memories/'.length))
+      const body = await readJson(req)
+      return send(res, 200, { ok: true, ...(await updateNote(settings, rel, body)) })
+    }
+    if (req.method === 'DELETE' && url.pathname.startsWith('/api/memories/')) {
+      const rel = decodeURIComponent(url.pathname.slice('/api/memories/'.length))
+      return send(res, 200, { ok: true, ...(await trashNote(settings, rel)) })
+    }
+    if (req.method === 'POST' && /^\/api\/memories\/.+\/(archive|unarchive)$/.test(url.pathname)) {
+      const match = url.pathname.match(/^\/api\/memories\/(.+)\/(archive|unarchive)$/)
+      const rel = decodeURIComponent(match[1])
+      const result = match[2] === 'archive'
+        ? await archiveNote(settings, rel, { confirm: true })
+        : await unarchiveNote(settings, rel)
+      return send(res, 200, { ok: true, ...result })
+    }
+    if (req.method === 'POST' && url.pathname === '/api/inbox/accept') {
+      const body = await readJson(req)
+      return send(res, 200, { ok: true, ...(await acceptInbox(settings, body.path, { kind: body.kind, title: body.title, description: body.description })) })
+    }
+    if (req.method === 'POST' && url.pathname === '/api/inbox/reject') {
+      const body = await readJson(req)
+      return send(res, 200, { ok: true, ...(await rejectInbox(settings, body.path)) })
+    }
+    if (req.method === 'POST' && url.pathname === '/api/tasks') {
+      const body = await readJson(req)
+      return send(res, 200, { ok: true, task: await createTask(settings, body) })
+    }
+    if (req.method === 'POST' && /^\/api\/tasks\/.+\/cancel$/.test(url.pathname)) {
+      const id = decodeURIComponent(url.pathname.match(/^\/api\/tasks\/(.+)\/cancel$/)[1])
+      return send(res, 200, { ok: true, task: await cancelTask(settings, id) })
+    }
+    if (req.method === 'POST' && url.pathname === '/api/profile') {
+      const body = await readJson(req)
+      const profile = await writeProfile(settings, body.profile)
+      await ensureCollectionDirs(settings, profile)
+      return send(res, 200, { ok: true, profile })
+    }
     if (url.pathname === '/api/health') {
       return send(res, 200, { ok: true, version: '0.14.0', device: settings.deviceName, agent: settings.agentName })
     }
