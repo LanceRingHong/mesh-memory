@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.11.0 — 2026-11-01
+
+P1 自主生长 + P2 互通。
+
+- **技能包**：`skills/` 新增 `mesh-capture` / `mesh-reflect` / `mesh-curate` / `mesh-defrag` / `mesh-doctor` / `mesh-onboard` / `mesh-continue`，启动时自动注册（`src/skills.js`）。
+- **维护层**：`src/maintenance.js` 提供 `doctor`（permalink/checksum/重复/冲突/收件箱）、`duplicates`（checksum + 标题归一）、`reflectBrief`（自上次反思以来变化）、`runMaintenance`（报告落盘 `$DSH_HOME/dsh-mesh/reports/`）。
+- **新工具**：`mesh_memory_doctor` / `mesh_memory_duplicates` / `mesh_memory_reflect` / `mesh_memory_onboard`。
+- **定时维护**：`maintenanceIntervalMinutes`（默认 1440，0 关闭），启动 90 秒后跑第一次。
+- **会话简报**：每个会话首次装配注入 `<mesh-briefing>`（设备、计数、最近决策），对应 Basic Memory 的 SessionStart hook。
+- **PreCompact 等价**：`session/event` 里带 `compact` 的事件会立即把当前缓冲落成收件箱草稿。
+- **互通**：`adapters/mcp-server.mjs`（stdio MCP，6 个工具）；`bin/mm.mjs` CLI（search/read/write/recent/context/doctor/duplicates/reflect/onboard/status）。
+- 测试：新增维护层与技能解析用例。
+
 ## 0.10.0 — 2026-11-01
 
 记忆格式 v2 + 身份（Phase 1 地基）。

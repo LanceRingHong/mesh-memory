@@ -200,6 +200,12 @@ export function registerCapture(ctx, settings) {
     try {
       const id = String(session?.id || '')
       if (!id || !event) return
+      // 对应 Basic Memory 的 PreCompact hook：压缩上下文前先落一份草稿，
+      // 避免“压缩后忘掉刚才做了什么”。事件名按包含 compact 匹配，兼容不同宿主。
+      if (/compact/i.test(String(event?.type || ''))) {
+        flush(settings, id, 'compact').catch(() => {})
+        return
+      }
       let buffer = buffers.get(id)
       if (!buffer) {
         buffer = createBuffer(session)

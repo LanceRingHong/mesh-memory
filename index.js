@@ -1,4 +1,6 @@
 import Schema from '@deepseek-ai/schemastery'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { settingsOf } from './src/config.js'
 import { ensureLayout, publishNativeManifest, updateDevices } from './src/store.js'
 import { materializeAgents, syncSkills } from './src/agents.js'
@@ -10,6 +12,9 @@ import { registerCapture } from './src/capture.js'
 import { inboxNudge } from './src/inbox.js'
 import { registerCommands } from './src/command.js'
 import { snapshot } from './src/backup.js'
+import { loadSkillPack, registerSkillPack } from './src/skills.js'
+import { registerBriefing } from './src/briefing.js'
+import { runMaintenance } from './src/maintenance.js'
 
 export const name = 'dsh-mesh'
 
@@ -44,6 +49,7 @@ export const Config = Schema.object({
   backupDebounceSeconds: Schema.number().default(60).description('写入后多久合并成一个快照。'),
   backupIntervalMinutes: Schema.number().default(360).description('定时快照间隔（分钟，0 关闭）。'),
   inboxMaxDrafts: Schema.number().default(100).description('收件箱最多保留多少条草稿。'),
+  maintenanceIntervalMinutes: Schema.number().default(1440).description('记忆体检（doctor/duplicates）间隔分钟数；0 关闭。'),
 })
 
 const SKILL = `# dsh-mesh：跨设备共享记忆与委托
@@ -129,11 +135,16 @@ export function apply(ctx, config = {}) {
   const settings = settingsOf(config)
   const disposers = registerTools(ctx, settings)
   const disposeSkill = registerSkill(ctx)
+  const skillDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'skills')
+  const skillPack = loadSkillPack(skillDir)
+  const disposeSkillPack = registerSkillPack(ctx, skillPack)
+  if (skillPack.length) console.info(`[dsh-mesh] skill pack loaded: ${skillPack.length} (${skillPack.map((s) => s.name).join(', ')})`)
   const disposeDashboard = registerDashboard(ctx, settings)
   registerNative(ctx, settings)
   const disposeRecall = registerRecall(ctx, settings)
   const disposeCapture = registerCapture(ctx, settings)
   const disposeNudge = registerInboxNudge(ctx, settings)
+  const disposeBriefing = registerBriefing(ctx, settings)
   const disposeCommands = registerCommands(ctx, settings)
 
   let backupTimer = null
@@ -142,6 +153,16 @@ export function apply(ctx, config = {}) {
       snapshot(settings, 'interval').catch(() => {})
     }, settings.backupIntervalMinutes * 60_000)
     backupTimer.unref?.()
+  }
+
+  let maintenanceTimer = null
+  let maintenanceFirst = null
+  if (Number(settings.maintenanceIntervalMinutes) > 0) {
+    const run = () => runMaintenance(settings).catch(() => {})
+    maintenanceFirst = setTimeout(run, 90_000)
+    maintenanceFirst.unref?.()
+    maintenanceTimer = setInterval(run, Number(settings.maintenanceIntervalMinutes) * 60_000)
+    maintenanceTimer.unref?.()
   }
 
   // 初始化与 AGENTS 物化放在后台，避免拖慢宿主启动；失败只记录，不影响宿主。
@@ -167,6 +188,9 @@ export function apply(ctx, config = {}) {
         disposeSkill?.()
       } catch {}
       try {
+        disposeSkillPack?.()
+      } catch {}
+      try {
         disposeDashboard?.()
       } catch {}
       try {
@@ -179,9 +203,14 @@ export function apply(ctx, config = {}) {
         disposeNudge?.()
       } catch {}
       try {
+        disposeBriefing?.()
+      } catch {}
+      try {
         disposeCommands?.()
       } catch {}
       if (backupTimer) clearInterval(backupTimer)
+      if (maintenanceTimer) clearInterval(maintenanceTimer)
+      if (maintenanceFirst) clearTimeout(maintenanceFirst)
     }
   })
 }

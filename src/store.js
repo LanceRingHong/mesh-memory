@@ -616,7 +616,7 @@ export function publishNativeManifest(settings) {
   return run
 }
 
-async function walk(root, rel = '') {
+export async function walk(root, rel = '') {
   const out = []
   const dir = path.join(root, rel)
   let entries

@@ -22,6 +22,7 @@ import { resolveUploadPath } from './policy.js'
 import { listInbox, readInbox, acceptInbox, rejectInbox } from './inbox.js'
 import { flushAllSessions, flushCurrent } from './capture.js'
 import { snapshot, listSnapshots, restoreSnapshot, scheduleSnapshot } from './backup.js'
+import { doctor, duplicates, reflectBrief, onboardBlueprint, applyOnboarding } from './maintenance.js'
 import {
   asObject,
   listHosts,
@@ -261,6 +262,63 @@ export function registerTools(ctx, settings) {
       const result = await updateNote(settings, args.path, patch)
       scheduleSnapshot(settings, 'memory:update')
       return json({ ok: true, ...result })
+    },
+  })
+
+  add({
+    name: 'mesh_memory_doctor',
+    description: '只读体检：检查缺失 permalink/checksum、重复、冲突副本、失效时间、收件箱积压，返回带修复建议的清单。',
+    parameters: {},
+    async execute() {
+      await ensureLayout(settings)
+      return json(await doctor(settings))
+    },
+  })
+
+  add({
+    name: 'mesh_memory_duplicates',
+    description: '查找重复记忆：正文 checksum 相同或标题归一化后相同，返回簇与建议（不自动删除）。',
+    parameters: {},
+    async execute() {
+      await ensureLayout(settings)
+      return json(await duplicates(settings))
+    },
+  })
+
+  add({
+    name: 'mesh_memory_reflect',
+    description: '反思简报：列出上次反思（或 N 天）以来变化的记忆，供整理与折回。',
+    parameters: {
+      since: str('起始时间（ISO，可选）'),
+      days: num('没有历史反思时回看的天数，默认 7'),
+    },
+    async execute(args) {
+      await ensureLayout(settings)
+      return json(await reflectBrief(settings, { since: args.since, days: args.days }))
+    },
+  })
+
+  add({
+    name: 'mesh_memory_onboard',
+    description: '入门蓝图：按领域生成记忆结构建议；apply + confirm 时写一条蓝图笔记（不伪造用户偏好）。',
+    parameters: {
+      domains: { type: 'array', items: { type: 'string' }, description: '想跟踪的领域（建议 2-3 个）' },
+      volume: str('使用强度：light / heavy'),
+      project: str('项目名，默认 my-memory'),
+      apply: bool('是否写一条蓝图笔记（默认 false）'),
+      confirm: bool('apply 时必须为 true'),
+    },
+    async execute(args) {
+      await ensureLayout(settings)
+      const blueprint = onboardBlueprint({
+        domains: args.domains || [],
+        volume: args.volume || 'light',
+        project: args.project || 'my-memory',
+      })
+      if (args.apply !== true) return json({ ok: true, mode: 'preview', blueprint })
+      const result = await applyOnboarding(settings, blueprint, { confirm: args.confirm === true })
+      scheduleSnapshot(settings, 'onboard:apply')
+      return json({ ok: true, mode: 'apply', ...result })
     },
   })
 
