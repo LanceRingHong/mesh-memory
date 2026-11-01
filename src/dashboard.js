@@ -503,6 +503,8 @@ async function handleMutation(pathname, body, settings) {
         content: body.content,
         tags: Array.isArray(body.tags) ? body.tags : ['ui'],
         device: settings.deviceName,
+        agent: settings.agentName,
+        source: 'ui',
       })
       scheduleSnapshot(settings, 'ui:write')
       return { ok: true, path: path.relative(settings.memoryDir, file).replace(/\\/g, '/') }

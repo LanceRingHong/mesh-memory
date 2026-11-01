@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { stamp } from './config.js'
+import { stamp, slugify } from './config.js'
 
 const AGENTS_TEMPLATE = `# 共享记忆（dsh-mesh）
 
@@ -22,6 +22,14 @@ const AGENTS_TEMPLATE = `# 共享记忆（dsh-mesh）
 
 const SESSION_ID_RE = /^[A-Za-z0-9._-]{1,128}$/
 const MANAGED_FILE_RE = /^(AGENTS\.shared\.md|skills\/|memory\/|sessions\/)/
+const NOTE_SCHEMA = 2
+
+/** v2 frontmatter 的固定字段顺序；三处写入（write/update/migrate）共用。 */
+export const NOTE_ORDER = [
+  'schema', 'id', 'permalink', 'title', 'kind', 'memoryType', 'description',
+  'device', 'agent', 'source', 'createdAt', 'updatedAt', 'checksum',
+  'tags', 'aliases', 'baseline', 'baselinePriority', 'validAt', 'invalidAt', 'supersededBy',
+]
 
 function parseDate(value) {
   if (value === undefined || value === null || value === '') return null
@@ -98,11 +106,19 @@ export async function updateDevices(settings, extra = {}) {
   const now = Date.now()
   const last = Date.parse(prev?.lastSeen || '')
   const entry = {
+    // 合并旧记录：hostId / syncthingDeviceId / aliases 等手工维护的字段不能丢（0.10.0）。
+    ...(prev && typeof prev === 'object' ? prev : {}),
     name: settings.deviceName,
     deviceSlug: settings.deviceSlug,
     platform: process.platform,
     ...extra,
     lastSeen: new Date(now).toISOString(),
+  }
+  // 设备改名时保留旧名，方便辨认历史数据。
+  if (prev?.name && prev.name !== settings.deviceName) {
+    const aliases = new Set(Array.isArray(prev.aliases) ? prev.aliases : [])
+    aliases.add(prev.name)
+    entry.aliases = [...aliases]
   }
   if (!(Number.isFinite(last) && now - last < 10 * 60 * 1000)) {
     await writeFileAtomic(file, `${JSON.stringify(entry, null, 2)}\n`)
@@ -252,6 +268,31 @@ export function parseFrontmatter(text) {
   return { attrs, body }
 }
 
+/**
+ * 统一渲染 v2 frontmatter（0.10.0）。
+ * - 字段顺序固定，方便 diff 与人工阅读；
+ * - 未知字段追加在末尾，避免迁移/编辑时丢掉用户自定义字段；
+ * - 值统一用 JSON 形式（字符串带引号、数组/布尔/数字原样）。
+ */
+export function renderNote(attrs = {}, body = '') {
+  const lines = ['---']
+  const seen = new Set()
+  for (const key of NOTE_ORDER) {
+    seen.add(key)
+    const value = attrs[key]
+    if (value === undefined || value === null || value === '' || value === false) continue
+    if (key === 'baselinePriority' && !Number(value)) continue
+    lines.push(`${key}: ${JSON.stringify(value)}`)
+  }
+  for (const [key, value] of Object.entries(attrs)) {
+    if (seen.has(key) || value === undefined || value === null || value === '') continue
+    if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(key)) continue
+    lines.push(`${key}: ${JSON.stringify(value)}`)
+  }
+  lines.push('---', '')
+  return `${lines.join('\n')}${String(body || '').trim()}\n`
+}
+
 function defaultDescription(content) {
   const line = String(content || '')
     .split(/\r?\n/)
@@ -261,7 +302,8 @@ function defaultDescription(content) {
 }
 
 /**
- * 更新一条记忆（P2-16）：保留 id/createdAt/device，重写 frontmatter 与正文。
+ * 更新一条记忆（v2）：保留 id/permalink/createdAt/device/agent/source/schema，
+ * 重写 frontmatter 与正文；正文变化时重算 checksum，任何更新都刷新 updatedAt。
  * 只允许 memory/ 下的 .md，路径走 readInside/safeRel。
  */
 export async function updateNote(settings, rel, patch = {}) {
@@ -275,29 +317,23 @@ export async function updateNote(settings, rel, patch = {}) {
     if (patch[key] !== undefined) attrs[key] = patch[key]
   }
   if (!attrs.title) throw new Error('更新后标题不能为空')
-  if (patch.content !== undefined) attrs.updatedAt = new Date().toISOString()
-  const lines = ['---']
-  const order = ['id', 'title', 'kind', 'memoryType', 'description', 'device', 'createdAt', 'updatedAt', 'tags', 'aliases', 'baseline', 'baselinePriority', 'validAt', 'invalidAt', 'supersededBy']
-  const emit = (key, value) => {
-    if (value === undefined || value === null || value === '') return
-    lines.push(`${key}: ${typeof value === 'string' ? JSON.stringify(value) : JSON.stringify(value)}`)
-  }
-  for (const key of order) {
-    if (key === 'kind' && attrs.kind === undefined) {
-      emit('kind', String(rel).split('/')[1])
-      continue
-    }
-    if (key === 'id' && !attrs.id) {
-      emit('id', randomUUID())
-      continue
-    }
-    emit(key, attrs[key])
-  }
-  lines.push('---', '')
+
+  const now = new Date().toISOString()
+  attrs.schema = NOTE_SCHEMA
+  if (!attrs.id) attrs.id = randomUUID()
+  if (!attrs.kind) attrs.kind = String(rel).split('/')[1]
+  if (!attrs.permalink) attrs.permalink = await uniquePermalink(settings, slugify(attrs.title), rel)
+  if (!attrs.createdAt) attrs.createdAt = now
+  if (!attrs.device) attrs.device = settings.deviceName
+  if (!attrs.agent) attrs.agent = settings.agentName || 'dsh'
+  if (!attrs.source) attrs.source = 'manual'
+  attrs.updatedAt = now
+
   const body = patch.content !== undefined ? String(patch.content).trim() : String(parsed.body || '').trim()
-  await writeFileAtomic(file, `${lines.join('\n')}${body}\n`)
+  attrs.checksum = sha256(body)
+  await writeFileAtomic(file, renderNote(attrs, body))
   await publishNativeManifest(settings).catch(() => {})
-  return { path: String(rel), updatedAt: attrs.updatedAt || null }
+  return { path: String(rel), permalink: attrs.permalink, checksum: attrs.checksum, updatedAt: attrs.updatedAt }
 }
 
 /** 软删除：保留相对目录移入 .trash/，不直接删文件（P2-16）。 */
@@ -414,12 +450,39 @@ export async function writeFileAtomic(file, data) {
   return file
 }
 
+/**
+ * 全库唯一的 permalink（0.10.0）：读取 memory/ 下已有的 permalink 或 title，
+ * 重名追加 -2、-3；仍冲突则加随机后缀。文件量大了以后再上索引（Phase 2）。
+ */
+export async function uniquePermalink(settings, base, excludeRel = '') {
+  const taken = new Set()
+  for (const file of await walk(settings.memoryDir, 'memory')) {
+    const rel = path.relative(settings.memoryDir, file).replace(/\\/g, '/')
+    if (isConflictPath(rel)) continue
+    if (excludeRel && rel === String(excludeRel).replace(/\\/g, '/')) continue
+    try {
+      const head = (await fs.readFile(file, 'utf8')).slice(0, 4096)
+      const attrs = parseFrontmatter(head).attrs
+      const existing = String(attrs.permalink || '').trim()
+      if (existing) taken.add(existing.toLowerCase())
+      else if (attrs.title) taken.add(slugify(String(attrs.title)))
+    } catch {}
+  }
+  const root = String(base || 'note').trim() || 'note'
+  let candidate = root
+  for (let i = 2; taken.has(candidate.toLowerCase()) && i <= 99; i += 1) candidate = `${root}-${i}`
+  if (taken.has(candidate.toLowerCase())) candidate = `${root}-${randomBytes(2).toString('hex')}`
+  return candidate
+}
+
 export async function writeNote(settings, {
   kind,
   title,
   content,
   tags = [],
   device,
+  agent,
+  source,
   memoryType,
   description,
   aliases = [],
@@ -440,25 +503,31 @@ export async function writeNote(settings, {
   const dir = path.join(settings.memoryDir, 'memory', k)
   await fs.mkdir(dir, { recursive: true })
   const file = path.join(dir, `${fileBase}.md`)
-  const lines = [
-    '---',
-    `id: ${randomUUID()}`,
-    `title: ${JSON.stringify(safeTitle)}`,
-    `kind: ${k}`,
-    `memoryType: ${type}`,
-    `description: ${JSON.stringify(String(description || '').trim().slice(0, 240) || defaultDescription(content))}`,
-    `device: ${JSON.stringify(device || settings.deviceName)}`,
-    `createdAt: ${new Date().toISOString()}`,
-    `tags: ${JSON.stringify(tags || [])}`,
-  ]
-  if (aliases && aliases.length) lines.push(`aliases: ${JSON.stringify(aliases)}`)
-  if (baseline === true) lines.push('baseline: true')
-  if (baseline === true && Number(baselinePriority)) lines.push(`baselinePriority: ${Number(baselinePriority)}`)
-  if (validAt) lines.push(`validAt: ${JSON.stringify(validAt)}`)
-  if (invalidAt) lines.push(`invalidAt: ${JSON.stringify(invalidAt)}`)
-  if (supersededBy) lines.push(`supersededBy: ${JSON.stringify(supersededBy)}`)
-  lines.push('---', '')
-  await writeFileAtomic(file, `${lines.join('\n')}${String(content || '').trim()}\n`)
+  const body = String(content || '').trim()
+  const now = new Date().toISOString()
+  const attrs = {
+    schema: NOTE_SCHEMA,
+    id: randomUUID(),
+    permalink: await uniquePermalink(settings, slugify(safeTitle)),
+    title: safeTitle,
+    kind: k,
+    memoryType: type,
+    description: String(description || '').trim().slice(0, 240) || defaultDescription(content),
+    device: device || settings.deviceName,
+    agent: agent || settings.agentName || 'dsh',
+    source: source || 'manual',
+    createdAt: now,
+    updatedAt: now,
+    checksum: sha256(body),
+    tags: Array.isArray(tags) ? tags : [],
+  }
+  if (Array.isArray(aliases) && aliases.length) attrs.aliases = aliases
+  if (baseline === true) attrs.baseline = true
+  if (baseline === true && Number(baselinePriority)) attrs.baselinePriority = Number(baselinePriority)
+  if (validAt) attrs.validAt = validAt
+  if (invalidAt) attrs.invalidAt = invalidAt
+  if (supersededBy) attrs.supersededBy = supersededBy
+  await writeFileAtomic(file, renderNote(attrs, body))
   await publishNativeManifest(settings).catch(() => {})
   return file
 }

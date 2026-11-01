@@ -146,6 +146,8 @@ export async function acceptInbox(settings, rel, { kind = 'notes', title, descri
     content: parsed.body.trim(),
     tags: ['auto-capture', 'session'],
     device: settings.deviceName,
+    agent: settings.agentName,
+    source: `session:${parsed.attrs.sessionId || 'unknown'}`,
   })
   await moveToArchive(settings, file, 'accepted')
   await maybeSummarize(settings)

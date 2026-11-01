@@ -77,10 +77,30 @@ async function ensureRepo(settings) {
   await runGit(settings, ['config', 'core.quotepath', 'false'])
 }
 
+/**
+ * 同步目录里的发行物/同步元数据不进 git 快照（0.10.0）：
+ * .mesh 里可能有上百 MB 的安装包，提交一次就永远留在历史里。
+ */
+async function ensureExcludes(settings) {
+  const dir = backupDir(settings)
+  const info = path.join(dir, 'info')
+  const file = path.join(info, 'exclude')
+  const content = ['.mesh/', '.stfolder/', '.stversions/', '*.tmp-*', ''].join('\n')
+  try {
+    const prev = await fs.readFile(file, 'utf8')
+    if (prev === content) return
+  } catch {}
+  await fs.mkdir(info, { recursive: true })
+  await fs.writeFile(file, content, 'utf8')
+}
+
 async function doSnapshot(settings, reason) {
   if (settings.backupEnabled !== true) return { changed: false, skipped: 'disabled' }
   await ensureRepo(settings)
+  await ensureExcludes(settings)
   await runGit(settings, ['add', '-A'])
+  // 忽略规则写在 $GIT_DIR/info/exclude；`git add -A` 会静默跳过 .mesh 等目录。
+  // 注意：不要用 `:(exclude).mesh` 路径参数——git 会因为“显式添加被忽略路径”直接报错。
   const status = await runGit(settings, ['status', '--porcelain'], { allowFail: true })
   if (!status.stdout.trim()) return { changed: false, skipped: 'no-changes' }
   const message = `snapshot: ${settings.deviceName} ${reason} ${new Date().toISOString()}`

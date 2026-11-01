@@ -21,6 +21,7 @@ export const Config = Schema.object({
     .default('')
     .description('共享记忆目录；留空时 Windows 用 ~/DSH-mesh，Android 若有 /sdcard 用 /sdcard/DSH-mesh。'),
   deviceName: Schema.string().default('').description('本设备在共享记忆里的名字；留空用主机名。'),
+  agentName: Schema.string().default('').description('本设备上的 Agent 名称（如 dsh-desktop / dsh-go / claude-code）；留空用 dsh。'),
   autoSyncAgents: Schema.boolean().default(false).description('加载时把 AGENTS.shared.md 物化到本机设备级 AGENTS.md（带备份）。'),
   syncSkills: Schema.boolean().default(false).description('加载时把共享 skills 复制到本机技能目录（默认关闭）。'),
   autoRecall: Schema.boolean().default(true).description('每轮对话按问题自动检索相关记忆并注入上下文（默认开启）。'),
@@ -151,7 +152,7 @@ export function apply(ctx, config = {}) {
       await publishNativeManifest(settings)
       if (settings.autoSyncAgents) await materializeAgents(settings)
       if (settings.syncSkills) await syncSkills(settings)
-      console.info(`[dsh-mesh] ready device=${settings.deviceName} memoryDir=${settings.memoryDir}`)
+      console.info(`[dsh-mesh] ready device=${settings.deviceName} agent=${settings.agentName} memoryDir=${settings.memoryDir}`)
     })
     .catch((error) => console.warn('[dsh-mesh] init failed:', error?.message || error))
 

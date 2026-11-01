@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.0 — 2026-11-01
+
+记忆格式 v2 + 身份（Phase 1 地基）。
+
+- frontmatter 新增 `schema`（=2）、`permalink`（全库唯一、标题变了也不改）、`checksum`（正文 sha256）、`source`（manual/ui/session:<id>/legacy）、`agent`（写入者，如 dsh-desktop / dsh-go）；`updatedAt` 创建时即写。
+- `writeNote` 自动生成唯一 `permalink`（重名 `-2`、`-3`）；`updateNote` 保留身份字段、重算 checksum。
+- 新增配置 `agentName`；`mesh_status` 返回 `agent`。
+- `updateDevices` 合并旧记录，保留 `hostId`/`syncthingDeviceId`/`aliases`，改名时自动把旧名写进 `aliases`。
+- 备份快照排除 `.mesh/`、`.stfolder/`、`.stversions/`，并在 git 仓库写 `info/exclude`。
+- 新增 `scripts/migrate-schema-v2.mjs`：把旧记忆补齐 v2 字段、归一 device、合并设备注册表；支持 `--dry-run`。
+- 迁移映射：`刘瀚予的电脑` → `Mate-Book-GT-14`，`localhost` → `Magic Pad 3 Pro`。
+- 测试：新增 permalink 去重、checksum、更新保留身份、renderNote 往返等用例。
+
 ## 0.9.7 — 2026-11-01
 
 去掉重复标题、压缩顶部占位。

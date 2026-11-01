@@ -219,6 +219,84 @@ test('updateNote 保留 id/createdAt，未传字段不变（P2-16）', async (t)
   await assert.rejects(() => store.updateNote(settings, 'AGENTS.shared.md', { title: 'x' }), /只允许更新/)
 })
 
+test('writeNote 生成 v2 字段，permalink 全库唯一（0.10.0）', async (t) => {
+  const { settings, cleanup } = await makeSettings()
+  t.after(cleanup)
+  await store.ensureLayout(settings)
+
+  const first = await store.writeNote(settings, {
+    kind: 'facts', title: 'Mesh Memory', content: 'alpha', agent: 'dsh-test', source: 'session:s1',
+  })
+  const second = await store.writeNote(settings, { kind: 'facts', title: 'Mesh Memory', content: 'beta' })
+  const a = store.parseFrontmatter(await fs.readFile(first, 'utf8')).attrs
+  const b = store.parseFrontmatter(await fs.readFile(second, 'utf8')).attrs
+
+  assert.equal(a.schema, 2)
+  assert.equal(a.permalink, 'mesh-memory')
+  assert.equal(b.permalink, 'mesh-memory-2')
+  assert.equal(a.agent, 'dsh-test')
+  assert.equal(a.source, 'session:s1')
+  assert.equal(a.checksum, store.sha256('alpha'))
+  assert.ok(a.createdAt)
+  assert.equal(a.createdAt, a.updatedAt)
+  assert.deepEqual(a.tags, [])
+})
+
+test('updateNote 重算 checksum、保留 permalink/id（0.10.0）', async (t) => {
+  const { settings, cleanup } = await makeSettings()
+  t.after(cleanup)
+  await store.ensureLayout(settings)
+  const file = await store.writeNote(settings, { kind: 'facts', title: 'checksum me', content: 'v1' })
+  const rel = path.relative(settings.memoryDir, file).replace(/\\/g, '/')
+  const before = store.parseFrontmatter(await fs.readFile(file, 'utf8')).attrs
+
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  const out = await store.updateNote(settings, rel, { content: 'v2' })
+  const after = store.parseFrontmatter(await fs.readFile(file, 'utf8')).attrs
+
+  assert.equal(out.permalink, before.permalink)
+  assert.equal(after.permalink, before.permalink)
+  assert.equal(after.id, before.id)
+  assert.equal(after.createdAt, before.createdAt)
+  assert.equal(after.checksum, store.sha256('v2'))
+  assert.notEqual(after.updatedAt, before.updatedAt)
+})
+
+test('renderNote 与 parseFrontmatter 往返一致（0.10.0）', () => {
+  const attrs = {
+    schema: 2, id: 'x', permalink: 'a-b', title: '标题', kind: 'facts',
+    memoryType: 'project', description: '描述', device: 'D', agent: 'dsh',
+    source: 'manual', createdAt: '2026-11-01T00:00:00.000Z',
+    updatedAt: '2026-11-01T00:00:00.000Z', checksum: 'abc', tags: ['t1'],
+  }
+  const parsed = store.parseFrontmatter(store.renderNote(attrs, '正文'))
+  assert.equal(parsed.attrs.permalink, 'a-b')
+  assert.equal(parsed.attrs.title, '标题')
+  assert.equal(parsed.attrs.schema, 2)
+  assert.deepEqual(parsed.attrs.tags, ['t1'])
+  assert.equal(parsed.body.trim(), '正文')
+})
+
+test('updateDevices 合并旧记录，保留 hostId 与别名（0.10.0）', async (t) => {
+  const { settings, cleanup, memoryDir } = await makeSettings()
+  t.after(cleanup)
+  await store.ensureLayout(settings)
+  const file = path.join(memoryDir, 'index', 'devices', `${settings.deviceSlug}.json`)
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  await fs.writeFile(file, JSON.stringify({
+    name: 'Old Name', deviceSlug: settings.deviceSlug,
+    hostId: 'host-1', syncthingDeviceId: 'sync-1', aliases: ['older'],
+  }), 'utf8')
+
+  const list = await store.updateDevices(settings)
+  const row = list.find((item) => item.deviceSlug === settings.deviceSlug)
+  assert.equal(row.hostId, 'host-1')
+  assert.equal(row.syncthingDeviceId, 'sync-1')
+  assert.equal(row.name, settings.deviceName)
+  assert.ok(row.aliases.includes('older'))
+  assert.ok(row.aliases.includes('Old Name'))
+})
+
 test('软删除进回收站并可恢复（P2-16）', async (t) => {
   const { settings, cleanup } = await makeSettings()
   t.after(cleanup)

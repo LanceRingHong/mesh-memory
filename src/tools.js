@@ -135,6 +135,7 @@ export function registerTools(ctx, settings) {
       return json({
         device: settings.deviceName,
         deviceSlug: settings.deviceSlug,
+        agent: settings.agentName,
         memoryDir: settings.memoryDir,
         dshHome: settings.dshHome,
         counts: { ...c, inbox: inbox.length },
@@ -197,6 +198,8 @@ export function registerTools(ctx, settings) {
         invalidAt: args.invalidAt,
         supersededBy: args.supersededBy,
         device: settings.deviceName,
+        agent: settings.agentName,
+        source: 'manual',
       })
       // 只返回相对路径：不把宿主绝对路径写进模型上下文（P0-1/P3）。
       scheduleSnapshot(settings, 'memory:write')
@@ -464,6 +467,7 @@ export function registerTools(ctx, settings) {
         '---',
         `sessionId: ${JSON.stringify(sessionId)}`,
         `device: ${JSON.stringify(settings.deviceName)}`,
+        `agent: ${JSON.stringify(settings.agentName)}`,
         `title: ${JSON.stringify(title)}`,
         `updatedAt: ${new Date().toISOString()}`,
         `cwd: ${JSON.stringify(header?.cwd || '')}`,

@@ -41,6 +41,7 @@ export function slugify(value) {
 export function settingsOf(config = {}) {
   const memoryDir = path.resolve(((config.memoryDir || '').trim()) || defaultMemoryDir())
   const deviceName = ((config.deviceName || '').trim()) || (process.env.DSH_MESH_DEVICE || '').trim() || os.hostname() || 'device'
+  const agentName = ((config.agentName || '').trim()) || (process.env.DSH_MESH_AGENT || '').trim() || 'dsh'
   const dshHome = (process.env.DSH_HOME || '').trim()
     ? path.resolve(process.env.DSH_HOME)
     : path.join(os.homedir(), '.dsh')
@@ -51,6 +52,7 @@ export function settingsOf(config = {}) {
     memoryDir,
     deviceName,
     deviceSlug: slugify(deviceName),
+    agentName,
     dshHome,
     autoSyncAgents: config.autoSyncAgents === true,
     syncSkills: config.syncSkills === true,
