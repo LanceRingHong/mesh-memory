@@ -293,6 +293,50 @@ export async function applyOnboarding(settings, blueprint, { confirm = false } =
   return { path: path.relative(settings.memoryDir, file).replace(/\\/g, '/'), title }
 }
 
+/** 无感维护信号：给会话开场注入“该做维护了”，并点名对应技能。 */
+export async function maintenanceHint(settings, { staleDays = 30, reflectDays = 3 } = {}) {
+  const docs = await loadMemoryDocs(settings)
+  const now = Date.now()
+  const reflections = docs
+    .filter((d) => /reflection|反思/i.test(`${d.attrs.title || ''} ${d.path}`))
+    .map((d) => Date.parse(d.updatedAt || iso(d.mtimeMs)))
+    .filter((t) => Number.isFinite(t))
+  const last = reflections.length ? Math.max(...reflections) : 0
+  const days = last ? Math.floor((now - last) / 86_400_000) : null
+
+  const inboxDir = path.join(settings.dshHome || '', 'dsh-mesh', 'inbox', 'sessions')
+  const inbox = await fs.readdir(inboxDir).then((list) => list.filter((x) => x.endsWith('.md')).length).catch(() => 0)
+  const conflicts = await listConflicts(settings).catch(() => [])
+  const stale = docs.filter((d) => {
+    const at = Date.parse(d.updatedAt || iso(d.mtimeMs))
+    return Number.isFinite(at) && now - at > staleDays * 86_400_000
+  }).length
+
+  const parts = []
+  const skills = []
+  if (!last) {
+    parts.push('还没有 reflection')
+    skills.push('mesh-reflect')
+  } else if (days >= reflectDays) {
+    parts.push(`${days} 天未反思`)
+    skills.push('mesh-reflect')
+  }
+  if (inbox > 0) {
+    parts.push(`待确认 ${inbox} 条`)
+    skills.push('mesh-capture')
+  }
+  if (conflicts.length) {
+    parts.push(`同步冲突 ${conflicts.length}`)
+    skills.push('mesh-doctor')
+  }
+  if (stale > 0) {
+    parts.push(`30 天未更新 ${stale} 条`)
+    skills.push('mesh-curate')
+  }
+  if (!parts.length) return null
+  return { text: parts.join('；'), skills: [...new Set(skills)] }
+}
+
 /** 定时维护：体检 + 重复检测，报告写到 $DSH_HOME/dsh-mesh/reports/。 */
 export async function runMaintenance(settings) {
   const report = await doctor(settings)

@@ -1,5 +1,6 @@
 import { counts, recentFiles } from './store.js'
 import { listInbox } from './inbox.js'
+import { maintenanceHint } from './maintenance.js'
 
 /**
  * 会话开场简报（0.11.0）：每个会话第一次装配系统提示时注入一次，
@@ -31,6 +32,8 @@ export function registerBriefing(ctx, settings) {
         lines.push('最近决策：')
         for (const item of decisions) lines.push(`- ${item.title}（${item.path}）`)
       }
+      const hint = await maintenanceHint(settings).catch(() => null)
+      if (hint) lines.push(`维护：${hint.text}；建议调用 ${hint.skills.join(' / ')}。`)
       lines.push('需要更多时用 mesh_memory_search / mesh_memory_read；重要结论用 mesh_memory_write 写回。', '</mesh-briefing>')
       return {
         ...out,
