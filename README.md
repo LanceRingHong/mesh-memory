@@ -2,7 +2,7 @@
 
 > 给 AI 智能体的**共享记忆网**：一份 Markdown，多台设备、多个智能体共用；自主生长，但每一步可审阅。
 
-![version](https://img.shields.io/badge/version-0.18.0-blue)
+![version](https://img.shields.io/badge/version-0.19.0-blue)
 ![license](https://img.shields.io/github/license/LanceRingHong/mesh-memory)
 ![Node](https://img.shields.io/badge/Node-%E2%89%A518-3c873a)
 ![DSH](https://img.shields.io/badge/DSH-0.2.x-8a2be2)
@@ -57,9 +57,10 @@ mesh-memory 把记忆写成一张张 Markdown 卡片，放在你自己的目录�
 | `http://127.0.0.1:8767/` | `cd plugin && npm run serve` | 独立进程，DSH 关掉也能用 |
 | `http://127.0.0.1:8765/dsh-mesh/app/` | 装好插件即可 | 插件内托管，API 同源反代 |
 
-四个视图：**共享库**（树 + 搜索 + 详情 + 编辑 + 待确认）、**召回**（分数 / 预算 / 注入预览）、**拓扑**（设备 / Syncthing / Remote 任务）、**任务**（看板）、**设置**。
+六个视图：**共享库**（树 + 搜索 + 详情 + 编辑 + 待确认）、**召回**（分数 / 预算 / 注入预览 / 未达门槛）、**活动**（实时写入 + 最近变更）、**拓扑**（设备 / Syncthing / Remote 任务）、**任务**（看板）、**设置**。
 
 > 召回测试台支持深链：`#/recall?q=你的问题`，把"这次召回"原样发给别人复现。
+> 详情页可以看单条记忆的 **git 历史与 diff**，以及它**被召回过几次**。
 
 ![拓扑](docs/assets/mesh-client-topology-2026-11-01.png)
 
@@ -143,7 +144,7 @@ updatedAt: 2026-11-01T10:00:00+08:00
 | 阶段 | 状态 |
 |---|---|
 | S0 收口（一个前端、一次部署、一个入口） | ✅ 0.17.0 |
-| S1 看见（召回可解释、活动流、文件历史、关系弱边） | 🚧 |
+| S1 看见（召回可解释、活动流、文件历史、关系弱边） | ✅ 0.19.0 |
 | S2 治理（审阅三态 + diff + 撤销、索引层、图谱） | ⏳ |
 | S3 互通（Agent 身份、跨设备查询、任务总线） | ⏳ |
 | S4 分发（PWA、Tauri、发布） | ⏳ |

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { parseFrontmatter, isDocValid } from './store.js'
 import { extractLinks } from './links.js'
+import { recordRecall } from './recall-log.js'
 
 const K1 = 1.2
 const B = 0.75
@@ -309,6 +310,17 @@ export async function buildRecall(settings, query) {
       reason: 'bm25',
     })),
     linked: linked.map((doc) => ({ path: doc.path, title: doc.title, reason: 'wikilink' })),
+    // 检索到但过不了门槛的：明确列出来，避免"为什么没召回这条"只能靠猜。
+    rejected: ordered
+      .filter((item) => !hits.includes(item))
+      .slice(0, 5)
+      .map((item) => ({
+        path: item.doc.path,
+        title: item.doc.title,
+        score: Math.round(item.score * 1000) / 1000,
+        reason: item.specific ? 'below-threshold' : 'not-specific',
+      })),
+    threshold: Math.round(threshold * 1000) / 1000,
     budget: {
       limit: maxChars,
       used: text.length,
@@ -351,6 +363,8 @@ export async function explainRecall(settings, query) {
       baseline: [],
       hits: [],
       linked: [],
+      rejected: [],
+      threshold: 0,
       budget: { limit: Number(settings.recallMaxChars) || 6000, used: 0, truncated: false, sections: {} },
       candidates: built.candidates,
     },
@@ -387,6 +401,8 @@ export function registerRecall(ctx, settings) {
       if (seen.get(session.id) === signature) return assembled
       seen.set(session.id, signature)
       if (seen.size > 200) seen.delete(seen.keys().next().value)
+      // 只记真正注入过的轮次，供"这条记忆最近被用到没有"查询。
+      void recordRecall(settings, { query, files: built.files })
       return {
         ...assembled,
         contexts: [

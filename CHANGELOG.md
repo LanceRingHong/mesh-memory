@@ -1,3 +1,12 @@
+## 0.19.0 — 2026-11-01
+
+S1 看见（第二批）：活动流、文件历史、召回流水。
+
+- **活动流**：`bin/mm-serve.mjs` 用 `fs.watch` 监听 `memory/tasks/sessions/skills`，300ms 去抖后通过 SSE 推 `change` 事件；`GET /api/activity` 返回最近 200 条（内存环形缓冲）。客户端新增「活动」视图：本次会话写入 + 按 `updatedAt` 的最近变更，点击跳记忆。
+- **SSE 真事件**：`/api/events` 不再只有心跳，`hello` 事件带最近 20 条，断线不影响轮询兜底；客户端收到变化后 800ms 去抖刷新。截图/离线工具可用 `?nosse=1` 关闭长连接。
+- **单条历史**：`src/history.js` + `GET /api/history` / `GET /api/history/diff`，读本机 `dsh-mesh-backups.git`（`log --follow` + `show --patch`）。详情页新增「历史」抽屉：版本列表 + 选中看 diff。
+- **召回流水**：`src/recall-log.js` 记录每次真实注入（`$DSH_HOME/dsh-mesh/recall.jsonl`，2MB 轮转），`/api/data` 带 `recall.counts`，详情页显示「被召回 N 次」。
+- **召回测试台补 near-miss**：`detail.rejected` 列出"检索到但没进注入"的条目与原因（词太泛 / 低于门槛）与门槛值。
 # Changelog
 
 ## 0.18.0 — 2026-11-01
@@ -378,6 +387,7 @@ P1 自主生长 + P2 互通。
 ## 0.1.0 — 2026-10-31
 
 - Initial MVP: shared memory, 13 `mesh_*` tools, Remote delegation, file transfer.
+
 
 
 

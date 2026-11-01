@@ -17,6 +17,8 @@ import { doctor } from '../src/maintenance.js'
 import { readProfile, ensureProfile } from '../src/profile.js'
 import { collectionCounts, queryMemory, statusCounts } from '../src/query.js'
 import { explainRecall } from '../src/recall.js'
+import { readRecallLog, recallCounts } from '../src/recall-log.js'
+import { fileHistory, fileDiff } from '../src/history.js'
 
 /**
  * mesh-memory serve：REST 读写 + 托管客户端构建。
@@ -34,6 +36,53 @@ const settings = settingsOf({
 
 await ensureLayout(settings)
 await ensureProfile(settings)
+
+/* ------------------ 活动流：文件变化 + SSE 推送 ------------------ */
+
+const activity = []
+const eventClients = new Set()
+
+function noteActivity(entry) {
+  activity.unshift(entry)
+  if (activity.length > 200) activity.pop()
+  for (const client of eventClients) {
+    try {
+      client.write(`event: change\ndata: ${JSON.stringify(entry)}\n\n`)
+    } catch {}
+  }
+}
+
+// 监听共享目录：memory/tasks/sessions/skills 的变化合并成一条事件（300ms 去抖）。
+const pendingChanges = new Map()
+let flushTimer = null
+function scheduleFlush() {
+  if (flushTimer) clearTimeout(flushTimer)
+  flushTimer = setTimeout(() => {
+    flushTimer = null
+    if (!pendingChanges.size) return
+    const at = new Date().toISOString()
+    for (const [rel, event] of pendingChanges) {
+      noteActivity({ at, path: rel, kind: rel.split('/')[0], event, source: 'fs' })
+    }
+    pendingChanges.clear()
+  }, 300)
+  flushTimer.unref?.()
+}
+
+try {
+  const { watch } = await import('node:fs')
+  watch(settings.memoryDir, { recursive: true }, (event, filename) => {
+    const rel = String(filename || '').replace(/\\/g, '/')
+    if (!rel || rel.startsWith('.')) return
+    if (!/^(memory|tasks|sessions|skills)\//.test(rel)) return
+    if (!/\.(md|json)$/i.test(rel)) return
+    if (rel.includes('.sync-conflict-') || rel.includes('.tmp-')) return
+    pendingChanges.set(rel, String(event || 'change'))
+    scheduleFlush()
+  }).on('error', () => {})
+} catch (error) {
+  console.warn(`[mesh-memory] 文件监听不可用：${error?.message || error}`)
+}
 
 async function collectData() {
   const memories = []
@@ -106,7 +155,8 @@ async function collectData() {
     tasks: tasks.items,
     taskSummary: await taskSummary(settings),
     devices: devices.map((d) => ({ name: d.name, deviceSlug: d.deviceSlug, platform: d.platform || '', hostId: d.hostId || '', role: d.role || '', aliases: d.aliases || [], lastSeen: d.lastSeen || '' })),
-    graph: { nodes: graph.nodes, edges: graph.edges, broken: graph.broken },
+    graph: { nodes: graph.nodes, edges: graph.edges, broken: graph.broken, stats: graph.stats },
+    recall: { counts: await recallCounts(settings) },
   }
 }
 
@@ -256,6 +306,29 @@ const server = http.createServer(async (req, res) => {
       const result = await explainRecall(settings, query)
       return send(res, 200, { ok: true, ...result })
     }
+    if (url.pathname === '/api/recall/log') {
+      const target = url.searchParams.get('path') || ''
+      const limit = Number(url.searchParams.get('limit')) || 50
+      return send(res, 200, { ok: true, items: await readRecallLog(settings, { limit, path: target }) })
+    }
+    if (url.pathname === '/api/history') {
+      const target = url.searchParams.get('path') || ''
+      if (!target) return send(res, 400, { ok: false, error: 'path 必填' })
+      return send(res, 200, { ok: true, ...(await fileHistory(settings, target, { limit: Number(url.searchParams.get('limit')) || 10 })) })
+    }
+    if (url.pathname === '/api/history/diff') {
+      const target = url.searchParams.get('path') || ''
+      const commit = url.searchParams.get('commit') || ''
+      try {
+        return send(res, 200, { ok: true, ...(await fileDiff(settings, target, commit)) })
+      } catch (error) {
+        return send(res, 400, { ok: false, error: String(error?.message || error) })
+      }
+    }
+    if (url.pathname === '/api/activity') {
+      const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit')) || 50))
+      return send(res, 200, { ok: true, items: activity.slice(0, limit) })
+    }
     if (url.pathname === '/api/graph') return send(res, 200, await buildLinkGraph(settings))
     if (url.pathname === '/api/inbox') return send(res, 200, { items: await listInbox(settings) })
     if (url.pathname === '/api/tasks') return send(res, 200, await listTasks(settings, { status: url.searchParams.get('status') || undefined, limit: 100 }))
@@ -281,9 +354,18 @@ const server = http.createServer(async (req, res) => {
         Connection: 'keep-alive',
         'Access-Control-Allow-Origin': '*',
       })
-      res.write(`event: hello\ndata: ${JSON.stringify({ at: new Date().toISOString() })}\n\n`)
-      const timer = setInterval(() => res.write(`event: ping\ndata: ${Date.now()}\n\n`), 15_000)
-      req.on('close', () => clearInterval(timer))
+      res.write(`event: hello\ndata: ${JSON.stringify({ at: new Date().toISOString(), recent: activity.slice(0, 20) })}\n\n`)
+      eventClients.add(res)
+      const timer = setInterval(() => {
+        try {
+          res.write(`event: ping\ndata: ${Date.now()}\n\n`)
+        } catch {}
+      }, 15_000)
+      timer.unref?.()
+      req.on('close', () => {
+        clearInterval(timer)
+        eventClients.delete(res)
+      })
       return
     }
     if (req.method === 'GET' && !url.pathname.startsWith('/api/')) {
