@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.18.0 — 2026-11-01
+
+S1 看见（第一批）：召回可解释 + 关系弱边。
+
+- 新增 `POST/GET /api/recall`：复用真实注入路径（BM25 + baseline + wikilink 1 跳），返回每条命中的分数、字符数、理由，以及**字符预算分段**与最终注入文本。
+- `recall.js`：`buildRecall` 返回值新增 `detail`（baseline / hits / linked / budget），导出 `explainRecall`。
+- 客户端新增「召回」视图：输入一句话 → 分数条排序、点开对应记忆、右侧预算条 + 注入预览（可复制）；支持深链 `#/recall?q=...`。
+- 关系图新增**弱边**：共享 tag > 同来源 > 同分类+同设备+7 天内；每节点上限 3 条，`type: 'weak'` + `reason`，`/api/graph` 返回 `stats{strong,weak,broken}`。
+- 修断链误报：代码块/行内代码里的 `[[标题]]` 不再被当成真链接；`[[标题](url)` 这类 Markdown 写法也不再命中（当前断链 0）。
+- 弱边**不参与** `contextFor` 的 1 跳扩散，避免把上下文撑爆。
 ## 0.17.0 — 2026-11-01
 
 S0 收口：一个前端、一次部署、一个入口。
@@ -368,6 +378,9 @@ P1 自主生长 + P2 互通。
 ## 0.1.0 — 2026-10-31
 
 - Initial MVP: shared memory, 13 `mesh_*` tools, Remote delegation, file transfer.
+
+
+
 
 
 

@@ -16,6 +16,7 @@ import { listInbox, readInbox } from '../src/inbox.js'
 import { doctor } from '../src/maintenance.js'
 import { readProfile, ensureProfile } from '../src/profile.js'
 import { collectionCounts, queryMemory, statusCounts } from '../src/query.js'
+import { explainRecall } from '../src/recall.js'
 
 /**
  * mesh-memory serve：REST 读写 + 托管客户端构建。
@@ -182,7 +183,9 @@ const server = http.createServer(async (req, res) => {
   if (token && url.pathname.startsWith('/api/') && req.headers['x-mesh-token'] !== token && url.searchParams.get('token') !== token) {
     return send(res, 401, { ok: false, error: 'token required' })
   }
-  if (req.method !== 'GET' && req.headers['x-mesh-action'] !== '1') {
+  // 只读的 POST（召回测试台）不需要写操作头，其余写操作必须带。
+  const readOnlyPost = url.pathname === '/api/recall'
+  if (req.method !== 'GET' && !readOnlyPost && req.headers['x-mesh-action'] !== '1') {
     return send(res, 403, { ok: false, error: '写操作需要 x-mesh-action: 1' })
   }
   try {
@@ -246,6 +249,13 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { local: data.local, counts: data.counts, collections: data.collections, statuses: data.statuses, tasks: data.taskSummary, graph: { nodes: data.graph.nodes.length, edges: data.graph.edges.length, broken: data.graph.broken.length }, devices: data.devices })
     }
     if (url.pathname === '/api/profile') return send(res, 200, { ok: true, profile: await readProfile(settings) })
+    if (url.pathname === '/api/recall') {
+      const body = req.method === 'POST' ? await readJson(req) : {}
+      const query = String(body.query ?? url.searchParams.get('q') ?? '').trim()
+      if (!query) return send(res, 400, { ok: false, error: 'query 必填' })
+      const result = await explainRecall(settings, query)
+      return send(res, 200, { ok: true, ...result })
+    }
     if (url.pathname === '/api/graph') return send(res, 200, await buildLinkGraph(settings))
     if (url.pathname === '/api/inbox') return send(res, 200, { items: await listInbox(settings) })
     if (url.pathname === '/api/tasks') return send(res, 200, await listTasks(settings, { status: url.searchParams.get('status') || undefined, limit: 100 }))

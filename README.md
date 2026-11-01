@@ -2,7 +2,7 @@
 
 > 给 AI 智能体的**共享记忆网**：一份 Markdown，多台设备、多个智能体共用；自主生长，但每一步可审阅。
 
-![version](https://img.shields.io/badge/version-0.17.0-blue)
+![version](https://img.shields.io/badge/version-0.18.0-blue)
 ![license](https://img.shields.io/github/license/LanceRingHong/mesh-memory)
 ![Node](https://img.shields.io/badge/Node-%E2%89%A518-3c873a)
 ![DSH](https://img.shields.io/badge/DSH-0.2.x-8a2be2)
@@ -57,7 +57,9 @@ mesh-memory 把记忆写成一张张 Markdown 卡片，放在你自己的目录�
 | `http://127.0.0.1:8767/` | `cd plugin && npm run serve` | 独立进程，DSH 关掉也能用 |
 | `http://127.0.0.1:8765/dsh-mesh/app/` | 装好插件即可 | 插件内托管，API 同源反代 |
 
-四个视图：**共享库**（树 + 搜索 + 详情 + 编辑 + 待确认）、**拓扑**（设备 / Syncthing / Remote 任务）、**任务**（看板）、**设置**。
+四个视图：**共享库**（树 + 搜索 + 详情 + 编辑 + 待确认）、**召回**（分数 / 预算 / 注入预览）、**拓扑**（设备 / Syncthing / Remote 任务）、**任务**（看板）、**设置**。
+
+> 召回测试台支持深链：`#/recall?q=你的问题`，把"这次召回"原样发给别人复现。
 
 ![拓扑](docs/assets/mesh-client-topology-2026-11-01.png)
 
