@@ -108,6 +108,9 @@ async function collectData() {
       permalink: String(parsed.attrs.permalink || ''),
       tags: Array.isArray(parsed.attrs.tags) ? parsed.attrs.tags : [],
       updatedAt: String(parsed.attrs.updatedAt || parsed.attrs.createdAt || ''),
+      validAt: String(parsed.attrs.validAt || ''),
+      invalidAt: String(parsed.attrs.invalidAt || ''),
+      supersededBy: String(parsed.attrs.supersededBy || ''),
       checksum: String(parsed.attrs.checksum || ''),
       body: String(parsed.body || '').slice(0, 6000),
     })
@@ -407,3 +410,4 @@ const server = http.createServer(async (req, res) => {
 server.listen(port, '127.0.0.1', () => {
   console.log(`[mesh-memory] serve http://127.0.0.1:${port} device=${settings.deviceName} dir=${settings.memoryDir}`)
 })
+
